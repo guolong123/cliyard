@@ -217,7 +217,7 @@ def execute_pipeline(
     resource_name: str = "",
     http_client: Any = None,
     raw_response: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, Any] | str:
     """Execute the full request pipeline and return response data.
 
     Args:
@@ -358,14 +358,18 @@ def execute_pipeline(
                     f.write(chunk)
         return {"_downloaded": fname}
 
-    resp_data = response.json()
+    try:
+        resp_data = response.json()
+    except ValueError:
+        text = response.text
+        resp_data = text if text.strip() else {}
 
     # Flow orchestrator needs raw response for JSONPath extraction
     if raw_response:
         return resp_data
 
     output_spec: dict[str, Any] = method_spec.get("output", {})
-    if output_spec.get("items_path"):
+    if isinstance(resp_data, (dict, list)) and output_spec.get("items_path"):
         _raw_hooks = hooks_config.get("before-extract", [])
         if _raw_hooks:
             resp_data = run_post_response_hooks(_raw_hooks, resp_data)
@@ -411,6 +415,11 @@ def _make_callback(
             # Skip output formatting for file downloads
             if isinstance(data, dict) and data.get("_downloaded"):
                 console.print(f"[green]Downloaded: {data['_downloaded']}[/green]")
+                return
+
+            # Raw text response (XML, HTML, empty 204) — print as-is
+            if isinstance(data, str):
+                console.print(data)
                 return
 
             # Format output for CLI display
