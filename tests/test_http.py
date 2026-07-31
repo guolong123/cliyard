@@ -62,6 +62,21 @@ class TestHttpClientRequest:
         client.request("DELETE", "/api/resource", data=None)
         assert mock_session.call_args[1].get("json") is None
 
+    def test_post_with_string_body_sends_as_data(self, client, mock_session):
+        client.request("POST", "/api/resource", data="<project/>")
+        assert mock_session.call_args[1]["data"] == "<project/>"
+        assert mock_session.call_args[1].get("json") is None
+
+    def test_post_with_string_body_honors_user_content_type(self, client, mock_session):
+        client.request("POST", "/api/resource", data="<project/>", headers={"Content-Type": "text/xml"})
+        assert mock_session.call_args[1]["data"] == "<project/>"
+        assert mock_session.call_args[1]["headers"]["Content-Type"] == "text/xml"
+
+    def test_post_with_bytes_body_sends_as_data(self, client, mock_session):
+        client.request("POST", "/api/resource", data=b"<project/>")
+        assert mock_session.call_args[1]["data"] == b"<project/>"
+        assert mock_session.call_args[1].get("json") is None
+
 
 @patch("cliyard.client.http.requests.request")
 class TestStandaloneRequest:
@@ -91,3 +106,15 @@ class TestStandaloneRequest:
         self._make_ok(mock_req)
         request("GET", "http://localhost/api/resource", data={"key": "value"})
         assert mock_req.call_args[1].get("json") is None
+
+    def test_post_with_string_body_sends_as_data(self, mock_req):
+        self._make_ok(mock_req)
+        request("POST", "http://localhost/api/resource", data="<project/>")
+        assert mock_req.call_args[1]["data"] == "<project/>"
+        assert mock_req.call_args[1].get("json") is None
+
+    def test_post_with_string_body_honors_user_content_type(self, mock_req):
+        self._make_ok(mock_req)
+        request("POST", "http://localhost/api/resource", data="<project/>", headers={"Content-Type": "text/xml"})
+        assert mock_req.call_args[1]["data"] == "<project/>"
+        assert mock_req.call_args[1]["headers"]["Content-Type"] == "text/xml"

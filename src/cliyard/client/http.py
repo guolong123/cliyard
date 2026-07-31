@@ -51,14 +51,17 @@ class HttpClient:
             )
         else:
             send_json = isinstance(data, (dict, list)) and method.upper() in ("POST", "PUT", "PATCH", "DELETE")
-            if send_json and "Content-Type" not in merged_headers:
-                merged_headers["Content-Type"] = "application/json"
-            if not url.startswith("http"):
-                url = f"{self.base_url}{url}"
+            kwargs: dict = {}
+            if send_json:
+                if "Content-Type" not in merged_headers:
+                    merged_headers["Content-Type"] = "application/json"
+                kwargs["json"] = data
+            elif data is not None:
+                kwargs["data"] = data
             resp = self._session.request(
                 method,
                 url,
-                json=data if send_json else None,
+                **kwargs,
                 params=query_params,
                 headers=merged_headers or None,
                 timeout=timeout or self.timeout,
@@ -112,13 +115,18 @@ def request(
         )
     else:
         send_json = isinstance(data, (dict, list)) and method.upper() in ("POST", "PUT", "PATCH", "DELETE")
-        if send_json and "Content-Type" not in merged_headers:
-            merged_headers["Content-Type"] = "application/json"
+        kwargs = {}
+        if send_json:
+            if "Content-Type" not in merged_headers:
+                merged_headers["Content-Type"] = "application/json"
+            kwargs["json"] = data
+        elif data is not None:
+            kwargs["data"] = data
 
         response = requests.request(
             method=method,
             url=url,
-            json=data if send_json else None,
+            **kwargs,
             params=query_params,
             headers=merged_headers or None,
             timeout=timeout,
