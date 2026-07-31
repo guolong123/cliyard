@@ -49,13 +49,17 @@ except PackageNotFoundError:
     _VER = "0.0.0"
 from click.exceptions import UsageError
 from cliyard.runtime import create_cli
+from cliyard.runtime.runner import extract_server_override
 
 _SPEC_DIR = Path(__file__).parent / "specs"
 
 
 def main():
     try:
-        cli = create_cli(str(_SPEC_DIR), version=_VER)
+        argv, server = extract_server_override(sys.argv[1:])
+        if argv != sys.argv[1:]:
+            sys.argv = [sys.argv[0]] + argv
+        cli = create_cli(str(_SPEC_DIR), version=_VER, base_url_override=server)
         sys.exit(cli(standalone_mode=False))
     except UsageError as e:
         sys.exit(e.format_message())

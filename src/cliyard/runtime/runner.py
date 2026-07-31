@@ -13,6 +13,8 @@ Usage (from a generated CLI's ``__main__.py``)::
 
 from __future__ import annotations
 
+import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
@@ -20,7 +22,60 @@ from typing import Any, NoReturn
 import click
 
 
-def create_cli(spec_dir: str, version: str | None = None) -> click.Group:
+def _resolve_base_url_override(service_name: str, base_url_override: str | None) -> str | None:
+    """Resolve a runtime base_url override: explicit arg > env > None.
+
+    Env vars checked: ``<SERVICE_NAME>_SERVER`` (e.g. ``MYCLI_SERVER`` for a
+    service named ``my-cli``) and the generic ``CLIYARD_SERVER``.
+    """
+    if base_url_override:
+        return base_url_override
+    env_key = re.sub(r"[^A-Za-z0-9]+", "_", service_name.upper()).strip("_")
+    for var in (f"{env_key}_SERVER", "CLIYARD_SERVER"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return value
+    return None
+
+
+def extract_server_override(argv: list[str]) -> tuple[list[str], str | None]:
+    """Extract a ``--server``/``-s`` override from *argv*.
+
+    Both ``--server URL`` and ``--server=URL`` (and ``-s URL``) forms are
+    supported.  The matched arguments are removed from the returned argv so
+    Click never sees them.
+
+    Returns:
+        ``(cleaned_argv, server_url)`` — ``server_url`` is ``None`` when no
+        override was present.
+    """
+    out: list[str] = []
+    server: str | None = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("--server", "-s") and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+            server = argv[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--server="):
+            server = arg.split("=", 1)[1]
+            i += 1
+            continue
+        if arg.startswith("-s=") and len(arg) > 3:
+            server = arg[3:]
+            i += 1
+            continue
+        out.append(arg)
+        i += 1
+    return out, server
+
+
+def create_cli(
+    spec_dir: str,
+    version: str | None = None,
+    base_url_override: str | None = None,
+) -> click.Group:
     """Load a cliyard service spec and build a Click CLI group.
 
     Returns a ``click.Group`` with all resource commands registered.
@@ -32,6 +87,9 @@ def create_cli(spec_dir: str, version: str | None = None) -> click.Group:
 
     Args:
         spec_dir: Path to the service spec directory.
+        base_url_override: Optional base_url that takes precedence over the
+            saved profile and the spec's default server (also honored by the
+            ``<SERVICE>_SERVER`` / ``CLIYARD_SERVER`` env vars).
 
     Returns:
         ``click.Group`` with resource commands ready to run.
@@ -56,13 +114,17 @@ def create_cli(spec_dir: str, version: str | None = None) -> click.Group:
     if servers:
         default_server = servers.get(default_server_name) or next(iter(servers.values()), {})
 
-    # Resolve base_url: saved profile > default (no hard YAML base_url required)
+    # Resolve base_url: runtime override > saved profile > default (no hard YAML base_url required)
+    runtime_override = _resolve_base_url_override(service_name, base_url_override)
     from cliyard.client.credentials import get_current_profile
     saved_profile = get_current_profile()
     saved_endpoints: dict[str, str] = saved_profile.get("endpoints", {}) if saved_profile else {}
     saved_endpoint = saved_profile.get("endpoint") if saved_profile else None
-    base_url = saved_endpoint or default_server.get("base_url", "http://localhost:8080")
+    base_url = runtime_override or saved_endpoint or default_server.get("base_url", "http://localhost:8080")
     prefix = default_server.get("prefix", "")
+
+    # Service-level default output format (--format)
+    default_format: str = (service.get("output") or {}).get("default") or "json"
 
     # Auto-read saved credentials if persist is configured
     pre_filled: dict[str, Any] | None = None
@@ -98,6 +160,7 @@ def create_cli(spec_dir: str, version: str | None = None) -> click.Group:
         pre_filled_auth=pre_filled,
         servers=servers,
         timeout=default_server.get("timeout", 30),
+        default_format=default_format,
     )
 
     cli = click.Group(name=service_name, help=description)
@@ -138,15 +201,15 @@ def create_cli(spec_dir: str, version: str | None = None) -> click.Group:
 
     for resource in service.get("resources", []):
         group_name = resource.get("group", "")
-        # Resolve per-resource server: saved endpoints > saved default > YAML config
+        # Resolve per-resource server: runtime override > saved endpoints > saved default > YAML config
         resource_server_name = resource.get("server", "")
         if resource_server_name and servers and resource_server_name in servers:
             srv = servers[resource_server_name]
-            res_base = saved_endpoints.get(resource_server_name) or saved_endpoint or srv.get("base_url", base_url)
+            res_base = runtime_override or saved_endpoints.get(resource_server_name) or saved_endpoint or srv.get("base_url", base_url)
             res_prefix = srv.get("prefix", prefix)
             res_timeout = srv.get("timeout", 30)
         elif resource_server_name and saved_endpoints.get(resource_server_name):
-            res_base = saved_endpoints[resource_server_name]
+            res_base = runtime_override or saved_endpoints[resource_server_name]
             res_prefix = prefix
             res_timeout = 30
         else:
@@ -161,6 +224,7 @@ def create_cli(spec_dir: str, version: str | None = None) -> click.Group:
             pre_filled_auth=pre_filled,
             servers=servers,
             timeout=res_timeout,
+            default_format=default_format,
         )
         grp = build_resource_group(resource["name"], resource, res_ctx)
         if group_name:
@@ -254,7 +318,10 @@ def run_with_spec(spec_dir: str) -> NoReturn:
         >>> sys.exit(run_with_spec("tests/fixtures/spec-dir"))
     """
     try:
-        cli = create_cli(spec_dir)
+        argv, server = extract_server_override(sys.argv[1:])
+        if argv != sys.argv[1:]:
+            sys.argv = [sys.argv[0]] + argv
+        cli = create_cli(spec_dir, base_url_override=server)
     except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
