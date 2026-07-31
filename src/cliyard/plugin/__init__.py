@@ -8,6 +8,7 @@ Extension points:
 - commands: Custom top-level Click commands
 - field_resolvers: Dynamic field value resolvers (e.g. get latest version)
 - steps: Custom step types for flow orchestration
+- output_formats: Custom output formatters (e.g. "yaml")
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ class PluginRegistry:
     _commands: dict[str, Callable] = {}
     _field_resolvers: dict[str, Callable] = {}
     _step_types: dict[str, Callable] = {}
+    _output_formats: dict[str, Callable] = {}
     _loaded: bool = False
 
     @classmethod
@@ -97,6 +99,17 @@ class PluginRegistry:
         cls._step_types[name] = step_fn
 
     @classmethod
+    def register_output_format(cls, name: str, format_fn: Callable) -> None:
+        """Register a custom output formatter for the ``--format`` option.
+
+        The function receives ``(data, fields=None)`` and returns a string.
+        Built-in formats (table/json/csv/yaml) cannot be overridden; a
+        registered name is added to the ``--format`` choices on every
+        command.
+        """
+        cls._output_formats[name] = format_fn
+
+    @classmethod
     def get_auth_step(cls, name: str) -> type | None:
         return cls._auth_steps.get(name)
 
@@ -125,6 +138,14 @@ class PluginRegistry:
         return cls._step_types.get(name)
 
     @classmethod
+    def get_output_format(cls, name: str) -> Callable | None:
+        return cls._output_formats.get(name)
+
+    @classmethod
+    def get_output_formats(cls) -> dict[str, Callable]:
+        return dict(cls._output_formats)
+
+    @classmethod
     def get_all_commands(cls) -> dict[str, Callable]:
         return dict(cls._commands)
 
@@ -137,6 +158,7 @@ class PluginRegistry:
         cls._commands.clear()
         cls._field_resolvers.clear()
         cls._step_types.clear()
+        cls._output_formats.clear()
         cls._loaded = False
 
 
@@ -227,5 +249,24 @@ def register_step_type(name: str):
     """
     def decorator(fn):
         PluginRegistry.register_step_type(name, fn)
+        return fn
+    return decorator
+
+
+def register_output_format(name: str):
+    """Decorator that registers a function as an output formatter.
+
+    The function receives ``(data, fields=None)`` and returns a string.
+    The registered name becomes available to every command's ``--format``
+    option (unless it collides with a built-in format).
+
+    Usage::
+
+        @register_output_format("xml")
+        def format_as_xml(data, fields=None):
+            return xml_to_string(data)
+    """
+    def decorator(fn):
+        PluginRegistry.register_output_format(name, fn)
         return fn
     return decorator

@@ -194,11 +194,14 @@ class OutputSpec(TypedDict, total=False):
         items_path: JSONPath to the list of items.
         total_path: JSONPath to total count (optional).
         fields: List of field definitions for output display.
+        default: Default ``--format`` for this method (table/json/csv/yaml
+            or a plugin-registered format).
     """
 
     items_path: str
     total_path: str
     fields: list[FieldSpec]
+    default: str
 
 
 class MethodSpec(TypedDict, total=False):

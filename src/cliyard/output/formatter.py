@@ -28,6 +28,30 @@ def format_as_json(data: dict | list | Any, *, indent: int = 2) -> str:
 
 
 # ---------------------------------------------------------------------------
+# YAML formatter
+# ---------------------------------------------------------------------------
+
+def format_as_yaml(data: dict | list | Any) -> str:
+    """Serialise *data* as a YAML string.
+
+    Args:
+        data: Any YAML-serialisable object (dict, list, or scalar).
+
+    Returns:
+        YAML string with ``allow_unicode=True`` so CJK characters render
+        directly, keys kept in definition order (``sort_keys=False``).
+    """
+    import yaml
+
+    return yaml.safe_dump(
+        data,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Rich table formatter
 # ---------------------------------------------------------------------------
 

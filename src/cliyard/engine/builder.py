@@ -43,6 +43,7 @@ class ServiceContext:
     pre_filled_auth: dict | None = None
     servers: dict | None = None
     timeout: int = 30  # HTTP request timeout in seconds  # All named servers: {name: {base_url, prefix, ...}}
+    default_format: str = "json"  # Default --format when spec doesn't set output.default
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +203,70 @@ def bind_and_validate(kwargs: dict[str, Any], method_spec: dict[str, Any]) -> di
         Dict of ``param_name → validated_value``.
     """
     return kwargs
+
+
+# ---------------------------------------------------------------------------
+# Output format helpers
+# ---------------------------------------------------------------------------
+
+_BUILTIN_FORMATS: tuple[str, ...] = ("table", "json", "csv", "yaml")
+
+
+def _resolve_default_format(method_spec: dict[str, Any], ctx: ServiceContext) -> str:
+    """Resolve the default ``--format`` for a command.
+
+    Precedence: method ``output.default`` > service default > ``json``.
+    """
+    default = (method_spec.get("output") or {}).get("default")
+    return default or ctx.default_format or "json"
+
+
+def _build_format_option(method_spec: dict[str, Any], ctx: ServiceContext) -> click.Option:
+    """Build the shared ``--format`` option (built-ins + plugin-registered formats)."""
+    from cliyard.plugin import PluginRegistry
+    from cliyard.plugin.discovery import discover_plugins
+
+    discover_plugins()
+    formats = list(_BUILTIN_FORMATS)
+    for _name in PluginRegistry.get_output_formats():
+        if _name not in formats:
+            formats.append(_name)
+    default = _resolve_default_format(method_spec, ctx)
+    if default not in formats:
+        default = "json"
+    return click.Option(
+        ["--format"],
+        type=click.Choice(formats),
+        default=default,
+        help="Output format",
+        show_default=True,
+    )
+
+
+def _render_output(output_format: str, data: Any, fields: list[dict] | None = None) -> str:
+    """Render *data* using a built-in or plugin-registered output format."""
+    from cliyard.output.formatter import format_as_csv, format_as_json, format_as_table, format_as_yaml
+
+    if output_format == "json":
+        return format_as_json(data)
+    if output_format == "yaml":
+        return format_as_yaml(data)
+    if output_format == "csv":
+        return format_as_csv(data, fields or [])
+    if output_format == "table":
+        return format_as_table(data, fields)
+
+    from cliyard.plugin import PluginRegistry
+    from cliyard.plugin.discovery import discover_plugins
+
+    discover_plugins()
+    fn = PluginRegistry.get_output_format(output_format)
+    if fn:
+        try:
+            return fn(data, fields=fields)
+        except TypeError:
+            return fn(data)
+    return format_as_json(data)
 
 
 # ---------------------------------------------------------------------------
@@ -400,14 +465,13 @@ def _make_callback(
 
     def callback(**kwargs: Any) -> None:
         from cliyard.engine.errors import CliyError
-        from cliyard.output.formatter import format_as_json, format_as_table, format_as_csv
         from rich.console import Console
 
         console = Console()
 
         try:
             # Extract built-in options (--format) before validation
-            output_format: str = kwargs.pop("format", "json")
+            output_format: str = kwargs.pop("format", "") or _resolve_default_format(method_spec, service_ctx)
 
             # Run shared pipeline
             data = execute_pipeline(kwargs, method_spec, resource_spec, service_ctx, resource_name)
@@ -424,29 +488,22 @@ def _make_callback(
 
             # Format output for CLI display
             output_spec: dict[str, Any] = method_spec.get("output", {})
-            items = data.get("items")
+            items = data.get("items") if isinstance(data, dict) else None
 
             if items is not None and len(items) == 0:
                 console.print("[yellow]No results found.[/yellow]")
             elif items:
-                fields = output_spec.get("fields", [])
-                if output_format == "json":
-                    console.print(format_as_json(data))
-                elif output_format == "csv":
-                    console.print(format_as_csv(data, fields))
-                else:
-                    console.print(format_as_table(data, fields))
+                console.print(_render_output(output_format, data, output_spec.get("fields", [])))
             elif output_spec.get("items_path"):
-                console.print(format_as_json(data))
+                console.print(_render_output(output_format, data, output_spec.get("fields", [])))
             else:
-                if output_format == "json":
-                    console.print(format_as_json(data))
-                elif output_format == "csv" and isinstance(data, list) and data:
+                if isinstance(data, list) and data:
                     fields = [{"name": k, "alias": k} for k in data[0]]
-                    console.print(format_as_csv({"items": data, "total": len(data), "fields": fields}, fields))
+                    rows: dict[str, Any] = {"items": data, "total": len(data), "fields": fields}
                 else:
                     fields = [{"name": k, "alias": k} for k in data[0]] if isinstance(data, list) and data else []
-                    console.print(format_as_table({"items": data if isinstance(data, list) else [data], "total": 0, "fields": fields}, fields))
+                    rows = {"items": data if isinstance(data, list) else [data], "total": 0, "fields": fields}
+                console.print(_render_output(output_format, rows, fields))
 
         except CliyError as e:
             console.print(f"[red]Error:[/red] {str(e).replace('[', '[[]').replace(']', '[]]')}")
@@ -497,15 +554,7 @@ def build_list_command(resource_spec: dict[str, Any], ctx: ServiceContext) -> cl
         click_params.append(_param_to_argument(param))
 
     # Built-in --format option for list command
-    click_params.append(
-        click.Option(
-            ["--format"],
-            type=click.Choice(["table", "json", "csv"]),
-            default="json",
-            help="Output format",
-            show_default=True,
-        )
-    )
+    click_params.append(_build_format_option(method_spec, ctx))
 
     return click.Command(
         name="list",
@@ -547,6 +596,9 @@ def build_operation_command(
     # Path params → positional arguments (always)
     for param in params_spec.get("path", []):
         click_params.append(_param_to_argument(param))
+
+    # Every operation command accepts --format (same as list)
+    click_params.append(_build_format_option(method_spec, ctx))
 
     http_method = method_spec.get("http", {}).get("method", "?")
     method_type = method_spec.get("type", "")
@@ -691,15 +743,7 @@ def build_flow_command(
         for param in params_spec.get(_loc, []):
             click_params.append(_param_to_option(param))
 
-    click_params.append(
-        click.Option(
-            ["--format"],
-            type=click.Choice(["table", "json", "csv"]),
-            default="json",
-            help="Output format",
-            show_default=True,
-        )
-    )
+    click_params.append(_build_format_option({}, ctx))
 
     def callback(**kwargs: Any) -> None:
         from cliyard.engine.errors import CliyError
