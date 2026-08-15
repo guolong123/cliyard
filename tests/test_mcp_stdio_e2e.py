@@ -118,6 +118,40 @@ def test_stdio_server_override_reaches_upstream(tmp_path):
         upstream.close()
 
 
+def test_stdio_grouped_resource_tool_call(tmp_path):
+    """分组资源工具（order.list）真连可执行（回归 CRITICAL#1）。
+
+    工具名 order.list（resource.method，不带 group 前缀），_lookup_resource_method
+    可解析；上游收到 /store/orders 请求并返回真实 JSON。
+    """
+    upstream = MockUpstream()
+    spec = write_spec(tmp_path, upstream.base_url)
+
+    async def main():
+        ctx, session = await _connect(str(spec))
+        try:
+            tools = await session.list_tools()
+            names = {t.name for t in tools.tools}
+            assert "order.list" in names, f"分组资源工具缺失: {sorted(names)}"
+
+            result = await session.call_tool("order.list", {"status": "placed"})
+            assert isinstance(result, CallToolResult)
+            assert result.is_error is False, result.content[0].text
+            data = json.loads(result.content[0].text)
+            assert data["items"][0]["name"] == "repo-a"
+            return result
+        finally:
+            await session.__aexit__(None, None, None)
+            await ctx.__aexit__(None, None, None)
+
+    try:
+        _run(main())
+        assert upstream.records and upstream.records[0]["method"] == "GET"
+        assert upstream.records[0]["path"].startswith("/store/orders")
+    finally:
+        upstream.close()
+
+
 # ---------------------------------------------------------------------------
 # 鉴权
 # ---------------------------------------------------------------------------

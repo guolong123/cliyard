@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import click
 
+from cliyard.cli.mcp_options import mcp_options
 from cliyard.server.mcp.server import run_mcp_server
 
 
@@ -21,45 +22,7 @@ from cliyard.server.mcp.server import run_mcp_server
     "spec_dir",
     type=click.Path(exists=True, file_okay=False, resolve_path=True),
 )
-@click.option(
-    "--transport",
-    type=click.Choice(["stdio", "http"]),
-    default="stdio",
-    show_default=True,
-    help="MCP transport: stdio (default) or Streamable HTTP",
-)
-@click.option(
-    "--host",
-    default="127.0.0.1",
-    show_default=True,
-    help="Bind host address (http transport)",
-)
-@click.option(
-    "--port",
-    default=8081,
-    type=int,
-    show_default=True,
-    help="Bind port (http transport)",
-)
-@click.option(
-    "--server",
-    "-s",
-    default=None,
-    metavar="URL",
-    help="Override server base URL (default: $<SERVICE>_SERVER / $CLIYARD_SERVER or spec base_url)",
-)
-@click.option(
-    "--token",
-    default=None,
-    metavar="TOKEN",
-    help="Bearer token for http transport (required when binding non-localhost)",
-)
-@click.option(
-    "--allow-remote-no-auth",
-    is_flag=True,
-    default=False,
-    help="Allow http transport on non-localhost without --token (not recommended)",
-)
+@mcp_options
 def mcp(
     spec_dir: str,
     transport: str,

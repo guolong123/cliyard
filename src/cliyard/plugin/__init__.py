@@ -167,7 +167,7 @@ class PluginRegistry:
             from cliyard.plugin.discovery import _scanned_dirs
 
             _scanned_dirs.clear()
-        except Exception:  # pragma: no cover
+        except ImportError:  # pragma: no cover — discovery 模块缺失时才走到
             pass
 
 

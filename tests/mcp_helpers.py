@@ -47,6 +47,34 @@ methods:
           required: true
 """
 
+# 分组资源（group: store, name: order）——验证分组资源工具的注册与执行
+# （工具名 = resource.method：order.list / order.place）
+ORDER_SPEC = """\
+group: store
+name: order
+description: 订单管理
+path: store/orders
+methods:
+  list:
+    http: {method: GET}
+    params:
+      query:
+        - name: status
+          type: enum
+          choices: [placed, delivered]
+    output:
+      items_path: items
+      fields:
+        - name: name
+  place:
+    http: {method: POST}
+    params:
+      body:
+        - name: pet_id
+          type: string
+          required: true
+"""
+
 
 class _Handler(BaseHTTPRequestHandler):
     """Records the last request and replies with canned JSON."""
@@ -125,6 +153,7 @@ def write_spec(
         lines.append("  " + dump.replace("\n", "\n  "))
     (spec / "_auth.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (spec / "repos.yaml").write_text(REPOS_SPEC, encoding="utf-8")
+    (spec / "store_order.yaml").write_text(ORDER_SPEC, encoding="utf-8")
     return spec
 
 

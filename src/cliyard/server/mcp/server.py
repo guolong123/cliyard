@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.lowlevel import Server as MCPServer
 from mcp.server.stdio import stdio_server
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.routing import Route
 
 from cliyard.server.mcp.executor import MCPExecutor
@@ -45,13 +47,14 @@ class _StaticTokenVerifier:
     """静态 bearer token 校验器（Streamable HTTP 鉴权开关用）。
 
     命中配置 token 返回 :class:`AccessToken`，否则 ``None``（→ 401）。
+    用恒定时间比较避免时序侧信道。
     """
 
     def __init__(self, token: str) -> None:
         self._token = token
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        if token and token == self._token:
+        if token and hmac.compare_digest(token, self._token):
             return AccessToken(token=token, client_id="cliyard", scopes=[])
         return None
 
@@ -63,6 +66,21 @@ def _auth_settings_for(token: str, host: str, port: int) -> AuthSettings:
         issuer_url=f"{base}/.well-known/oauth-authorization-server",
         resource_server_url=base,
     )
+
+
+def _transport_security_for(host: str) -> TransportSecuritySettings | None:
+    """为 Streamable HTTP 提供显式的 ``transport_security``（mcp 2.1+ 兼容）。
+
+    * localhost：返回 ``None`` → mcp SDK 自动启用 DNS rebinding 保护
+      （loopback Host/Origin 白名单），无需显式传入；
+    * 非 localhost（已强制 bearer token 鉴权）：显式传入并关闭 DNS rebinding
+      保护——bearer token 鉴权已是安全边界；通配绑定（``0.0.0.0`` / ``::``）
+      下 Host 头校验不可行，且避免 mcp 2.1+（PR #861）对未显式配置的
+      非 localhost 请求返回 421（Misdirected Request）。
+    """
+    if is_local_host(host):
+        return None
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
 
 def create_mcp_server(
@@ -103,6 +121,9 @@ def build_mcp_http_app(
     """
     server = create_mcp_server(spec_dir, server_override=server_override)
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
+    transport_security = _transport_security_for(host)
+    if transport_security is not None:
+        kwargs["transport_security"] = transport_security
     if token:
         kwargs["auth"] = _auth_settings_for(token, host, port)
         kwargs["token_verifier"] = _StaticTokenVerifier(token)
@@ -136,6 +157,9 @@ def mount_mcp_http(
     """
     server = create_mcp_server(spec_dir, server_override=server_override)
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
+    transport_security = _transport_security_for(host)
+    if transport_security is not None:
+        kwargs["transport_security"] = transport_security
     if token:
         kwargs["auth"] = _auth_settings_for(token, host, port)
         kwargs["token_verifier"] = _StaticTokenVerifier(token)

@@ -5,7 +5,8 @@ flow 树映射为 MCP 工具表，工具命名与 ``/api/execute`` 的 target �
 ``CLI / serve / MCP`` 三端同一命令标识：
 
 * 无 group 资源：``<resource>.<method>``（如 ``user.list``）
-* 有 group 资源：``<group>.<resource>.<method>``（如 ``asset.logcluster.<res>.<m>``）
+* 有 group 资源：``<resource>.<method>``（group 前缀不入工具名——执行内核
+  ``_lookup_resource_method`` 仅解析 ``resource.method``；资源名全局唯一）
 * flow：``flow.<command>``（``-`` 转 ``_``，如 ``flow.add_user``；target 保持
   ``_flows.yaml`` 的原始 command ``add-user``）
 
@@ -104,12 +105,17 @@ def build_tool_specs(spec_dir: str | Path) -> dict[str, ToolSpec]:
         gname: str = group.get("group") or ""
         grouped_resources = group.get("resources") or []
         if grouped_resources:
-            # 三级：组 > 资源 > 命令 → tool name = group.resource.method
+            # 三级：组 > 资源 > 命令。tool name 用 ``resource.method``（不带
+            # group 前缀）——执行内核 ``_lookup_resource_method`` 只解析
+            # ``resource.method``（rsplit('.',1)）；service.resources 中的资源
+            # 名全局唯一，去掉 group 前缀无冲突，且与 /api/execute target 一致。
+            # 跨组同名资源（不同 group 下同名 resource）才会冲突，由 _register
+            # 记录告警并由后者覆盖。
             for resource in grouped_resources:
                 rname: str = resource.get("name") or ""
                 rdesc: str = resource.get("desc") or rname
                 for cmd in resource.get("commands") or []:
-                    name = f"{gname}.{rname}.{cmd.get('name')}"
+                    name = f"{rname}.{cmd.get('name')}"
                     _register(specs, name, _command_spec(name, cmd, rdesc, group.get("desc") or ""))
         else:
             # 扁平资源（无 group 字段）：group name == 资源 name

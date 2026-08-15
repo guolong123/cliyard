@@ -1,8 +1,8 @@
 """Tests for MCP tool discovery / registration (方案 V1).
 
 Covers:
-- 三态命名对齐 /api/execute target：无 group（user.list）/ 有 group
-  （store.order.*）/ flow（flow.add_user → target add-user）
+- 工具命名与 /api/execute target 对齐：无 group（user.list）/ 有 group
+  （order.list，不带 group 前缀）/ flow（flow.add_user → target add-user）
 - inputSchema 与 build_command_tree（=/api/spec）一致性：required / enum /
   multiple→array / file→format:binary / json|object→object
 - Tool 元数据（name/description/input_schema）可通过 ``as_tool()`` 转换
@@ -30,13 +30,31 @@ def test_flat_resource_tool_names_align_with_execute_target():
             assert spec.target == name, f"command tool target must equal name: {name}"
 
 
-def test_grouped_resource_three_part_tool_names():
-    """有 group 资源：tool name == <group>.<resource>.<method>。"""
+def test_grouped_resource_tool_names_use_resource_method():
+    """有 group 资源：tool name == <resource>.<method>（= /api/execute target）。
+
+    执行内核 ``_lookup_resource_method`` 只解析 ``resource.method``，因此工具名
+    不带 group 前缀（group 仅供描述分组，不入命名）。
+    """
     specs = build_tool_specs(_DEMO_DIR)
-    assert "store.order.list" in specs
-    assert "store.order.place" in specs
-    assert specs["store.order.list"].kind == "command"
-    assert specs["store.order.list"].target == "store.order.list"
+    assert "order.list" in specs
+    assert "order.place" in specs
+    assert specs["order.list"].kind == "command"
+    assert specs["order.list"].target == "order.list"
+    # 描述里仍可带组名（订单管理）以帮助 LLM 理解归属
+    assert "订单管理" in (specs["order.list"].description or "")
+
+
+def test_grouped_tool_target_resolvable_by_lookup():
+    """分组资源工具 target 可被 _lookup_resource_method 解析（不抛 ValueError）。"""
+    from cliyard.engine.loader import load_service
+    from cliyard.engine.orchestrator import _lookup_resource_method
+
+    service = load_service(_DEMO_DIR)
+    resource, method_spec = _lookup_resource_method("order.list", service)
+    assert resource["name"] == "order"
+    assert method_spec.get("http", {}).get("method", "GET").upper() == "GET"
+    assert resource.get("group") == "store"
 
 
 def test_flow_tool_names_and_targets():
@@ -58,7 +76,7 @@ def test_tool_input_schema_matches_command_tree():
     order = next(r for r in store["resources"] if r["name"] == "order")
     order_cmds = {c["name"]: c for c in order["commands"]}
 
-    mcp_schema = specs["store.order.place"].input_schema
+    mcp_schema = specs["order.place"].input_schema
     api_schema = order_cmds["place"]["schema"]
     assert mcp_schema == api_schema
     # required / enum / default 透传

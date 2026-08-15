@@ -21,12 +21,38 @@ from mcp.types import CallToolResult
 
 from cliyard.server.mcp.executor import MCPExecutor
 
+from tests.mcp_helpers import write_spec
+
 _FIXTURES_SPEC = Path(__file__).resolve().parent / "fixtures" / "spec-dir"
 
 
 def test_tool_specs_loaded_on_init():
     ex = MCPExecutor(_FIXTURES_SPEC)
     assert set(ex.tool_specs) == {"repos.list", "repos.create"}
+
+
+def test_grouped_resource_command_executes_via_lookup(tmp_path, monkeypatch):
+    """分组资源工具（order.list）可经 _lookup_resource_method 真正执行。
+
+    回归 CRITICAL#1：工具名必须是 resource.method（不带 group 前缀），
+    否则 _lookup_resource_method 无法解析、调用必然 is_error。
+    """
+    spec = write_spec(tmp_path, "http://127.0.0.1:1")
+    captured: dict = {}
+
+    def fake_execute_pipeline(**kwargs):
+        captured["target_resource"] = kwargs["resource_spec"]["name"]
+        captured["target"] = kwargs["resource_name"]
+        return {"items": [{"name": "order-a"}], "total": 1, "fields": [{"name": "name"}]}
+
+    monkeypatch.setattr("cliyard.server.mcp.executor.execute_pipeline", fake_execute_pipeline)
+
+    ex = MCPExecutor(spec)
+    assert "order.list" in ex.tool_specs
+
+    result = ex.execute_command("order.list", {"status": "placed"})
+    assert captured["target_resource"] == "order"
+    assert result["total"] == 1
 
 
 def test_execute_command_reuses_execution_kernel(monkeypatch):
@@ -193,6 +219,29 @@ def test_call_tool_execution_error_returns_is_error(monkeypatch):
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
     assert "upstream exploded" in result.content[0].text
+
+
+def test_call_tool_error_message_is_sanitized(monkeypatch):
+    """错误消息中的 spec 绝对路径被脱敏（复用 _sanitize_error，防路径泄漏）。"""
+
+    def boom(**kwargs):
+        raise RuntimeError(f"failed reading {_FIXTURES_SPEC}/_auth.yaml")
+
+    monkeypatch.setattr("cliyard.server.mcp.executor.execute_pipeline", boom)
+
+    import anyio
+
+    ex = MCPExecutor(_FIXTURES_SPEC)
+    params = type("P", (), {"name": "repos.list", "arguments": {}})()
+
+    async def _go():
+        return await ex.call_tool(None, params)
+
+    result = anyio.run(_go)
+    assert result.is_error is True
+    text = result.content[0].text
+    assert str(_FIXTURES_SPEC) not in text, "spec 绝对路径不应泄漏给 MCP 客户端"
+    assert "<spec_dir>" in text
 
 
 def test_call_tool_success_returns_structured_text(monkeypatch):
