@@ -1,0 +1,5 @@
+name: dup-service
+version: "1.0"
+description: Test service with duplicate resource names across groups
+server:
+  base_url: https://httpbin.org

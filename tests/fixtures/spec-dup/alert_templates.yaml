@@ -1,0 +1,10 @@
+# 资源名 templates 出现在 alert 组（与 admin 组的 templates 重名）
+group: alert
+name: templates
+description: Alert templates
+path: alert/templates
+methods:
+  list:
+    description: List alert templates
+    http:
+      method: GET

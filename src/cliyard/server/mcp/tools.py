@@ -101,27 +101,55 @@ def build_tool_specs(spec_dir: str | Path) -> dict[str, ToolSpec]:
     tree = build_command_tree(spec_dir)
     specs: dict[str, ToolSpec] = {}
 
-    for group in tree.get("groups") or []:
+    groups = tree.get("groups") or []
+    duplicate_names = _duplicate_resource_names(groups)
+    for group in groups:
         gname: str = group.get("group") or ""
         grouped_resources = group.get("resources") or []
         if grouped_resources:
-            # 三级：组 > 资源 > 命令。tool name 用 ``resource.method``（不带
-            # group 前缀）——执行内核 ``_lookup_resource_method`` 只解析
-            # ``resource.method``（rsplit('.',1)）；service.resources 中的资源
-            # 名全局唯一，去掉 group 前缀无冲突，且与 /api/execute target 一致。
-            # 跨组同名资源（不同 group 下同名 resource）才会冲突，由 _register
-            # 记录告警并由后者覆盖。
             for resource in grouped_resources:
                 rname: str = resource.get("name") or ""
                 rdesc: str = resource.get("desc") or rname
                 for cmd in resource.get("commands") or []:
-                    name = f"{rname}.{cmd.get('name')}"
+                    if rname in duplicate_names:
+                        name = f"{gname}.{rname}.{cmd.get('name')}"
+                    else:
+                        name = f"{rname}.{cmd.get('name')}"
                     _register(specs, name, _command_spec(name, cmd, rdesc, group.get("desc") or ""))
         else:
             # 扁平资源（无 group 字段）：group name == 资源 name
             for cmd in group.get("commands") or []:
                 name = f"{gname}.{cmd.get('name')}"
                 _register(specs, name, _command_spec(name, cmd, group.get("desc") or "", ""))
+
+    for flow in tree.get("flows") or []:
+        name = f"flow.{flow.get('name')}"
+        spec = ToolSpec(
+            name=name,
+            kind="flow",
+            target=flow.get("command") or flow.get("name") or name,
+            description=flow.get("description") or flow.get("command") or name,
+            input_schema=flow.get("params_schema") or dict(_EMPTY_SCHEMA),
+        )
+        _register(specs, name, spec)
+
+    return specs
+
+
+def _duplicate_resource_names(groups: list[dict[str, Any]]) -> set[str]:
+    """跨组重名的资源名集合（tool name 需 group 前缀消歧）。
+
+    扁平资源（组名 == 资源名）视为独立名字，不参与消歧判断——它们天然
+    通过 CLI 二级命令区分，且 tool name ``组名.方法名`` 不会与带 group 的
+    三级资源冲突（前者无资源名段）。
+    """
+    seen: dict[str, set[str]] = {}
+    for group in groups:
+        for resource in group.get("resources") or []:
+            rname: str = resource.get("name") or ""
+            gname: str = group.get("group") or ""
+            seen.setdefault(rname, set()).add(gname)
+    return {name for name, groups_ in seen.items() if len(groups_) > 1}
 
     for flow in tree.get("flows") or []:
         name = f"flow.{flow.get('name')}"

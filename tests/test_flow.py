@@ -1370,6 +1370,53 @@ class TestEdgeCases:
         with pytest.raises(ValueError, match="resource.method"):
             _lookup_resource_method("justaname", {"resources": []})
 
+    def test_use_group_resource_method_disambiguates(self):
+        """group.resource.method 精确命中跨组同名资源。"""
+        service = {
+            "resources": [
+                {
+                    "name": "templates",
+                    "group": "admin",
+                    "methods": {"list": {"http": {"method": "GET"}}},
+                },
+                {
+                    "name": "templates",
+                    "group": "alert",
+                    "methods": {"list": {"http": {"method": "GET"}}},
+                },
+                {
+                    "name": "user",
+                    "methods": {"list": {"http": {"method": "GET"}}},
+                },
+            ]
+        }
+        resource, _ = _lookup_resource_method("admin.templates.list", service)
+        assert resource["group"] == "admin"
+        resource, _ = _lookup_resource_method("alert.templates.list", service)
+        assert resource["group"] == "alert"
+        # 扁平资源（无 group）也可用三段 target，group 段 = 资源名自身
+        resource, _ = _lookup_resource_method("user.user.list", service)
+        assert resource["name"] == "user"
+
+    def test_use_ambiguous_resource_name_raises(self):
+        """同名资源用无 group 的 resource.method 报歧义错误。"""
+        service = {
+            "resources": [
+                {
+                    "name": "templates",
+                    "group": "admin",
+                    "methods": {"list": {"http": {"method": "GET"}}},
+                },
+                {
+                    "name": "templates",
+                    "group": "alert",
+                    "methods": {"list": {"http": {"method": "GET"}}},
+                },
+            ]
+        }
+        with pytest.raises(ValueError, match="ambiguous"):
+            _lookup_resource_method("templates.list", service)
+
     def test_template_reference_unknown_step(self):
         """Template ``{{ step.nonexistent.field }}`` resolves to empty string."""
         result = resolve_template("{{ step.nonexistent.field }}", {"step": {}})

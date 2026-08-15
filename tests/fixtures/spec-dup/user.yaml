@@ -1,0 +1,9 @@
+# 唯一资源名 user（无同名，用于验证非重名资源不受影响）
+name: user
+description: Users
+path: users
+methods:
+  list:
+    description: List users
+    http:
+      method: GET

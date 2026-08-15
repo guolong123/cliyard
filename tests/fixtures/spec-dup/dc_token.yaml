@@ -1,0 +1,14 @@
+# 资源名 token 出现在 dc 组（与 setting 组的 token 重名）
+group: dc
+name: token
+description: DC agent token
+path: dc/token
+methods:
+  list:
+    description: List dc tokens
+    http:
+      method: GET
+  create:
+    description: Create dc token
+    http:
+      method: POST

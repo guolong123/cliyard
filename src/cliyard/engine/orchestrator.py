@@ -137,37 +137,82 @@ def _lookup_resource_method(
     use: str,
     service_spec: dict,
 ) -> tuple[dict, dict]:
-    """Parse ``resource.method`` and return (resource_spec, method_spec).
+    """Parse ``resource.method`` (or ``group.resource.method``) and return
+    (resource_spec, method_spec).
+
+    Two target formats are supported:
+
+    * ``resource.method`` — unambiguous form; used when resource names are
+      globally unique (the common case).
+    * ``group.resource.method`` — disambiguation form; required when the same
+      resource name appears under multiple groups (e.g. ``admin.templates.list``
+      vs ``alert.templates.list``). The group prefix selects the exact resource
+      the same way ``build_command_tree`` renders the nested command tree.
 
     Args:
-        use: Dot-separated ``"resource_name.method_name"``.
+        use: Dot-separated ``"resource_name.method_name"`` or
+            ``"group_name.resource_name.method_name"``.
         service_spec: Full loaded service with a ``resources`` key.
 
     Returns:
         Tuple of ``(resource_spec, method_spec)``.
 
     Raises:
-        ValueError: If the resource or method is not found.
+        ValueError: If the resource/method is not found, the target is
+            malformed, or an unambiguous ``resource.method`` targets a
+            resource name shared by multiple groups.
     """
+    resources = service_spec.get("resources", [])
     parts = use.rsplit(".", 1)
     if len(parts) != 2:
         raise ValueError(
             f"Invalid 'use' format {use!r}: expected 'resource.method'"
         )
+    head, method_name = parts
+    head_parts = head.rsplit(".", 1)
 
-    resource_name, method_name = parts
+    def _method_of(resource: dict) -> tuple[dict, dict]:
+        methods = resource.get("methods", {})
+        if method_name not in methods:
+            raise ValueError(
+                f"Method {method_name!r} not found in "
+                f"resource {resource.get('name')!r}"
+            )
+        return resource, methods[method_name]
 
-    for resource in service_spec.get("resources", []):
-        if resource.get("name") == resource_name:
-            methods = resource.get("methods", {})
-            if method_name not in methods:
-                raise ValueError(
-                    f"Method {method_name!r} not found in "
-                    f"resource {resource_name!r}"
-                )
-            return resource, methods[method_name]
+    if len(head_parts) == 2:
+        # group.resource.method — 精确匹配 group + resource
+        group_name, resource_name = head_parts
+        for resource in resources:
+            if (
+                resource.get("name") == resource_name
+                and (resource.get("group") or resource_name) == group_name
+            ):
+                return _method_of(resource)
+        raise ValueError(
+            f"Resource {resource_name!r} in group {group_name!r} "
+            f"not found in service spec"
+        )
 
-    raise ValueError(f"Resource {resource_name!r} not found in service spec")
+    # resource.method — 需资源名全局唯一，否则必须用 group 前缀消歧
+    resource_name = head
+    matches = [
+        r for r in resources if r.get("name") == resource_name
+    ]
+    if not matches:
+        raise ValueError(
+            f"Resource {resource_name!r} not found in service spec"
+        )
+    if len(matches) > 1:
+        groups = sorted(
+            (m.get("group") or resource_name) for m in matches
+        )
+        raise ValueError(
+            f"Resource {resource_name!r} is ambiguous: it exists in groups "
+            f"{groups}. Use 'group.{resource_name}.{method_name}' to "
+            f"disambiguate."
+        )
+    return _method_of(matches[0])
 
 
 # ---------------------------------------------------------------------------

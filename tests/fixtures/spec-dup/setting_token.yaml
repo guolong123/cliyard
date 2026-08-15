@@ -1,0 +1,18 @@
+# 资源名 token 出现在 setting 组（与 dc 组的 token 重名）
+group: setting
+name: token
+description: API access token
+path: auth/tokens
+methods:
+  list:
+    description: List tokens
+    http:
+      method: GET
+  create:
+    description: Create token
+    http:
+      method: POST
+  delete:
+    description: Delete token
+    http:
+      method: DELETE

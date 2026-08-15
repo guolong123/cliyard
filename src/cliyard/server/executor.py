@@ -367,7 +367,7 @@ class ExecutionManager:
                     method_spec=method_spec,
                     resource_spec=resource,
                     service_ctx=service_ctx,
-                    resource_name=target.split(".")[0],
+                    resource_name=resource.get("name") or target.split(".")[0],
                     event_cb=lambda name, payload: self._emit(execution, name, payload),
                     **({"http_client": client} if client is not None else {}),
                 )

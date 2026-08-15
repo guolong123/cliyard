@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from cliyard.server.mcp.tools import build_tool_specs
 from cliyard.server.schema_bridge import build_command_tree
 
@@ -130,3 +132,60 @@ def test_fixtures_spec_has_repos_tools():
     assert set(specs) == {"repos.list", "repos.create"}
     create = specs["repos.create"]
     assert create.input_schema["required"] == ["name"]
+
+
+_DUP_SPEC = Path(__file__).resolve().parent / "fixtures" / "spec-dup"
+
+
+def test_duplicate_resource_names_get_group_prefix():
+    """跨组同名资源：tool name/target 用 group.resource.method 消歧。"""
+    specs = build_tool_specs(_DUP_SPEC)
+    assert "admin.templates.list" in specs
+    assert "alert.templates.list" in specs
+    assert "dc.token.list" in specs
+    assert "dc.token.create" in specs
+    assert "setting.token.list" in specs
+    assert "setting.token.create" in specs
+    assert "setting.token.delete" in specs
+    # 消歧工具 target 保持三段（执行内核支持 group.resource.method）
+    assert specs["admin.templates.list"].target == "admin.templates.list"
+    assert specs["alert.templates.list"].target == "alert.templates.list"
+    assert specs["setting.token.delete"].target == "setting.token.delete"
+
+
+def test_duplicate_resource_tools_resolvable_by_lookup():
+    """消歧后的三段 target 可被 _lookup_resource_method 解析到正确资源。"""
+    from cliyard.engine.loader import load_service
+    from cliyard.engine.orchestrator import _lookup_resource_method
+
+    service = load_service(_DUP_SPEC)
+    admin_tpl, _ = _lookup_resource_method("admin.templates.list", service)
+    assert admin_tpl["name"] == "templates"
+    assert admin_tpl["group"] == "admin"
+    alert_tpl, _ = _lookup_resource_method("alert.templates.list", service)
+    assert alert_tpl["group"] == "alert"
+    setting_tok, _ = _lookup_resource_method("setting.token.create", service)
+    assert setting_tok["group"] == "setting"
+    dc_tok, _ = _lookup_resource_method("dc.token.create", service)
+    assert dc_tok["group"] == "dc"
+    setting_del, _ = _lookup_resource_method("setting.token.delete", service)
+    assert setting_del["group"] == "setting"
+
+
+def test_ambiguous_resource_method_raises():
+    """同名资源用无 group 的 resource.method 应报歧义错误。"""
+    from cliyard.engine.loader import load_service
+    from cliyard.engine.orchestrator import _lookup_resource_method
+
+    service = load_service(_DUP_SPEC)
+    with pytest.raises(ValueError, match="ambiguous"):
+        _lookup_resource_method("templates.list", service)
+    with pytest.raises(ValueError, match="ambiguous"):
+        _lookup_resource_method("token.list", service)
+
+
+def test_unique_resource_unaffected_by_duplicates():
+    """唯一资源名仍用 resource.method，不受同名消歧影响。"""
+    specs = build_tool_specs(_DUP_SPEC)
+    assert "user.list" in specs
+    assert specs["user.list"].target == "user.list"

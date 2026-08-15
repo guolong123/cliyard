@@ -1,0 +1,10 @@
+# 资源名 templates 出现在 admin 组（与 alert 组的 templates 重名）
+group: admin
+name: templates
+description: Admin index templates
+path: admin/templates
+methods:
+  list:
+    description: List admin templates
+    http:
+      method: GET
