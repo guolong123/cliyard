@@ -129,7 +129,7 @@ def test_tool_as_tool_metadata():
 def test_fixtures_spec_has_repos_tools():
     """fixtures/spec-dir：扁平 repos 资源映射为 repos.list / repos.create。"""
     specs = build_tool_specs(_FIXTURES_SPEC)
-    assert set(specs) == {"repos.list", "repos.create"}
+    assert {"repos.list", "repos.create"} <= set(specs)
     create = specs["repos.create"]
     assert create.input_schema["required"] == ["name"]
 

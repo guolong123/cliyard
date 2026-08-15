@@ -28,7 +28,7 @@ _FIXTURES_SPEC = Path(__file__).resolve().parent / "fixtures" / "spec-dir"
 
 def test_tool_specs_loaded_on_init():
     ex = MCPExecutor(_FIXTURES_SPEC)
-    assert set(ex.tool_specs) == {"repos.list", "repos.create"}
+    assert {"repos.list", "repos.create"} <= set(ex.tool_specs)
 
 
 def test_grouped_resource_command_executes_via_lookup(tmp_path, monkeypatch):

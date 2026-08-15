@@ -1,0 +1,5 @@
+name: plugin-test
+version: "1.0"
+description: Test service with command-level plugins
+server:
+  base_url: https://example.invalid

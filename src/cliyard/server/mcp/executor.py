@@ -39,7 +39,7 @@ from cliyard.server.context import build_service_context
 from cliyard.server.executor import _sanitize_error, execution_manager
 from cliyard.server.redact import redact_sensitive
 
-from cliyard.server.mcp.tools import ToolSpec, build_tool_specs
+from cliyard.server.mcp.tools import ToolSpec, build_plugin_tool_specs, build_tool_specs
 
 logger = logging.getLogger("cliyard.server.mcp")
 
@@ -71,6 +71,8 @@ class MCPExecutor:
         self.spec_dir: str = str(Path(spec_dir).resolve())
         self.server_override = server_override
         self._tool_specs: dict[str, ToolSpec] = build_tool_specs(self.spec_dir)
+        # 命令级插件（@register_command）→ cmd.<command> 工具
+        self._tool_specs.update(build_plugin_tool_specs(self.spec_dir))
         self._service: dict[str, Any] | None = None
         self._flows: list[Any] | None = None
 
@@ -172,10 +174,110 @@ class MCPExecutor:
             }
         )
 
+    def execute_plugin_command(
+        self, spec: ToolSpec, arguments: dict[str, Any]
+    ) -> str:
+        """执行一个命令级插件工具（``cmd.<command>``），返回捕获的文本输出。
+
+        复用 ``build_plugin_tool_specs`` 的挂载方式：构建临时 click.Group +
+        ServiceContext，调用全部命令插件 builder，再用 click 的
+        ``Command.main(standalone_mode=False)`` 执行目标命令，stdout/stderr
+        一并捕获为文本返回（rich console / click.echo 输出均在其中）。
+
+        命令内 ``sys.exit(0)``（正常退出）被吞掉；参数解析错误
+        （``click.UsageError``）与执行异常以文本形式返回，由上层标记 is_error。
+        """
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        import click
+
+        from cliyard.engine.loader import load_service
+        from cliyard.server.context import build_service_context
+        from cliyard.server.mcp.tools import _build_plugin_cli
+
+        service = self._load_service()
+        service_ctx = build_service_context(
+            self.spec_dir,
+            service,
+            base_url_override=self.server_override,
+        )
+        cli = _build_plugin_cli(self.spec_dir, service_ctx)
+
+        # 从 cmd.<group>.<sub> 逐级解析目标 click.Command
+        parts = spec.target.removeprefix("cmd.").split(".")
+        ctx = click.Context(cli)
+        cmd = cli
+        for part in parts:
+            if isinstance(cmd, click.Group):
+                cmd = cmd.get_command(ctx, part)
+            else:
+                break
+        if cmd is None:
+            raise ValueError(f"Command plugin {spec.target!r} not found")
+
+        # MCP arguments → click CLI 参数（长选项名对齐 schema 属性名）
+        args: list[str] = []
+        for param in getattr(cmd, "params", []) or []:
+            if isinstance(param, click.Argument):
+                value = (arguments or {}).get(param.name)
+                if value is None:
+                    continue
+                if param.nargs == -1:
+                    values = value if isinstance(value, list) else [value]
+                    args.extend(str(v) for v in values)
+                else:
+                    args.append(str(value))
+            elif isinstance(param, click.Option):
+                prop_name = ""
+                for opt in param.opts or []:
+                    if opt.startswith("--"):
+                        prop_name = opt[2:].replace("-", "_")
+                        break
+                if not prop_name:
+                    prop_name = param.name or ""
+                value = (arguments or {}).get(prop_name)
+                if value is None:
+                    continue
+                long_opt = next((o for o in param.opts if o.startswith("--")), param.opts[-1])
+                if param.is_flag:
+                    if value:
+                        args.append(long_opt)
+                    continue
+                if param.multiple or param.nargs == -1:
+                    values = value if isinstance(value, list) else [value]
+                    for v in values:
+                        args.extend([long_opt, str(v)])
+                else:
+                    args.extend([long_opt, str(value)])
+
+        out_buf = io.StringIO()
+        err_buf = io.StringIO()
+        try:
+            with redirect_stdout(out_buf), redirect_stderr(err_buf):
+                try:
+                    cmd.main(
+                        args,
+                        prog_name=f"cliyard {spec.target}",
+                        standalone_mode=False,
+                    )
+                except click.exceptions.Exit:
+                    pass  # 命令内 sys.exit(0) — 正常退出
+        except click.UsageError:
+            raise  # 参数错误由 call_tool 统一转 is_error（与 execute_command 一致）
+
+        out = out_buf.getvalue().strip()
+        err = err_buf.getvalue().strip()
+        if err and out:
+            return f"{out}\n[stderr] {err}"
+        return out or err or f"(no output from {spec.target})"
+
     def execute_spec(self, spec: ToolSpec, arguments: dict[str, Any]) -> Any:
-        """按 ToolSpec 分派执行（command / flow）。"""
+        """按 ToolSpec 分派执行（command / flow / plugin）。"""
         if spec.kind == "flow":
             return self.execute_flow(spec.target, arguments)
+        if spec.kind == "plugin":
+            return self.execute_plugin_command(spec, arguments)
         return self.execute_command(spec.target, arguments)
 
     # ------------------------------------------------------------------
