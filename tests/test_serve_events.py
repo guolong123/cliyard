@@ -134,6 +134,30 @@ def test_format_output_preview_redacted_without_items_path():
     assert "table" not in format_event
 
 
+def test_format_output_preview_not_truncated_for_large_response():
+    """format 事件 output_preview 不截断：超过 2000 字符的原始响应完整保留。"""
+    method_spec, resource_spec, service_ctx = _make_context()
+    method_spec["output"] = {"fields": []}
+    big_payload = {"items": [{"name": f"item-{i}"} for i in range(500)]}
+    client = MockHttpClient(payload=big_payload)
+
+    events: list = []
+    execute_pipeline(
+        {},
+        method_spec,
+        resource_spec,
+        service_ctx,
+        http_client=client,
+        event_cb=lambda name, payload: events.append((name, payload)),
+    )
+
+    format_event = [payload for name, payload in events if name == "format"][0]
+    preview = format_event["output_preview"]
+    assert len(preview) > 2000  # 超过旧 2000 截断上限
+    assert preview.endswith("}")  # JSON 完整闭合
+    assert '"item-499"' in preview  # 尾部内容保留
+
+
 def test_format_event_carries_structured_table():
     """items_path 分支：format 事件携带 table（columns=alias 列头 / rows / total）。"""
     method_spec, resource_spec, service_ctx = _make_context()
@@ -367,13 +391,12 @@ def test_redact_sensitive_unit():
 
 
 def test_step_result_preview_not_truncated_for_large_result():
-    """_step_result_preview 默认限制为 20000，大 JSON 结果不再被 500 字符截断。"""
+    """_step_result_preview 不再截断：超过 20000 字符的大 JSON 结果完整保留。"""
     from cliyard.engine.orchestrator import _step_result_preview
 
-    large = {"repos": [{"name": f"repo-{i}", "id": i} for i in range(200)]}
+    large = {"repos": [{"name": f"repo-{i}", "id": i} for i in range(2000)]}
     preview = _step_result_preview(large)
 
-    assert len(preview) > 500  # 旧 500 限制下会被截断
+    assert len(preview) > 20000  # 超过旧 20000 上限
     assert preview.endswith("}")  # JSON 完整闭合，未被截断
-    assert '"id": 199' in preview  # 尾部内容保留
-    assert len(preview) <= 20000  # 仍受新上限约束
+    assert '"id": 1999' in preview  # 尾部内容保留

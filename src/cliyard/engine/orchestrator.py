@@ -1435,10 +1435,10 @@ def _show_flow_summary(
         console.print("[bold red] ✗ Flow failed[/bold red]")
 
 
-def _step_result_preview(result: Any, limit: int = 20000) -> str:
-    """Render a step result as a redacted, truncated string for events."""
+def _step_result_preview(result: Any, limit: int | None = None) -> str:
+    """Render a step result as a redacted string for events (no truncation)."""
     text = _format_value(redact_sensitive(result))
-    return text[:limit]
+    return text if limit is None else text[:limit]
 
 
 def _emit_step(

@@ -570,13 +570,13 @@ def _build_table_payload(data: dict[str, Any]) -> dict[str, Any] | None:
     return {"columns": columns, "rows": rows, "total": data.get("total")}
 
 
-def _json_preview(obj: Any, limit: int = 2000) -> str:
-    """Render *obj* as compact JSON truncated to *limit* characters."""
+def _json_preview(obj: Any, limit: int | None = None) -> str:
+    """Render *obj* as compact JSON; truncate to *limit* chars only when given."""
     try:
         text = json.dumps(obj, ensure_ascii=False, default=str)
     except Exception:
         text = repr(obj)
-    return text[:limit]
+    return text if limit is None else text[:limit]
 
 
 def _make_callback(

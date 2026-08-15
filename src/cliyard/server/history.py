@@ -15,7 +15,7 @@
   明文数据再套一层 ``redact_sensitive`` 兜底）——重放时敏感字段为
   ``***``，需要真实凭证的用户需重新填写；
 * ``result_preview`` 取终态前最后一个 ``format`` / ``step_done`` 事件的
-  preview，截断 2000 字符。
+  preview（完整保留，不截断）。
 """
 
 from __future__ import annotations
@@ -34,8 +34,6 @@ if TYPE_CHECKING:
 # app 层通过模块常量 ``_HISTORY_DB`` 引用，测试可 monkeypatch 覆盖。
 DEFAULT_HISTORY_DB_PATH = Path.home() / ".cliyard" / "serve_history.db"
 
-_RESULT_PREVIEW_MAX = 20000
-
 
 def _command_display(execution: "Execution") -> str:
     """historyRows 展示用命令串（command 用 target，flow 用 flow command）。"""
@@ -52,7 +50,7 @@ def _duration_ms(execution: "Execution") -> int | None:
 
 
 def _result_preview(execution: "Execution") -> str | None:
-    """取最后一个 format/step_done 事件的 preview，截断 2000 字符。"""
+    """取最后一个 format/step_done 事件的 preview（完整保留，不截断）。"""
     for event in reversed(list(execution.steps)):
         if event.get("type") == "format":
             preview = event.get("output_preview")
@@ -61,7 +59,7 @@ def _result_preview(execution: "Execution") -> str | None:
         else:
             continue
         if preview is not None:
-            return str(preview)[:_RESULT_PREVIEW_MAX]
+            return str(preview)
     return None
 
 
