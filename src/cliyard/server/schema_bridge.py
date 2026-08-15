@@ -189,7 +189,9 @@ def build_command_tree(spec_dir: str | Path) -> dict[str, Any]:
         的 description，缺省回退资源 description。有 ``group`` 字段的资源写入
         ``resources``（三级：组 > 资源 > 命令）；无 ``group`` 字段的扁平资源
         ``resources`` 为空数组、命令直接挂组下（二级，前端据此判定扁平渲染）。
-        ``commands`` 为兼容字段，保留该组全部命令的拍平列表。
+        ``commands`` 为兼容字段：扁平资源直接拍平方法名；两级组资源以
+        ``资源名.方法名`` 命名消歧（与 ``resources[].commands`` 的 target
+        语义一致），避免同组下不同资源的同名方法重复展示。
 
     Raises:
         FileNotFoundError: spec_dir 缺少 _auth.yaml 时由 load_service 抛出。
@@ -231,10 +233,15 @@ def build_command_tree(spec_dir: str | Path) -> dict[str, Any]:
         if not entry["desc"]:
             _gdesc = (group_defs.get(gname) or {}).get("description")
             entry["desc"] = _gdesc or rdesc or f"{gname} 管理"
-        entry["commands"].extend(commands)
         if resource.get("group"):
             # 有 group → 三级：组 > 资源 > 命令；无 group 则 resources 保持 [] 触发前端二级扁平分支
             entry["resources"].append({"name": rname, "desc": rdesc, "commands": commands})
+            # 兼容字段 commands：两级组以 资源名.方法名 消歧，避免同组下不同资源的同名方法重复展示
+            entry["commands"].extend(
+                {**cmd, "name": f"{rname}.{cmd['name']}"} for cmd in commands
+            )
+        else:
+            entry["commands"].extend(commands)
 
     groups = list(grouped.values())
 

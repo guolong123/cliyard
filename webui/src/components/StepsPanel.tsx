@@ -468,10 +468,37 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
     return cancel;
   }, [executionId]);
 
-  const cards = useMemo(
-    () => steps.map((ev, i) => eventToCard(ev, i, i === steps.length - 1, loading)),
-    [steps, loading],
-  );
+  // flow 步骤卡片按 index 合并 step_start/step_done：同一步骤只渲染一张卡，
+  // step_start 建立卡片（use 行 + running），step_done 追加结果行并置为 done/error。
+  const cards = useMemo(() => {
+    const list: StepCard[] = [];
+    const byIndex = new Map<number, StepCard>();
+    const lastIdx = steps.length - 1;
+    steps.forEach((ev, i) => {
+      if (ev.type === "step_start") {
+        const card = eventToCard(ev, i, i === lastIdx, loading);
+        card.status = "running";
+        byIndex.set(Number(ev.index) || 0, card);
+        list.push(card);
+      } else if (ev.type === "step_done") {
+        const existing = byIndex.get(Number(ev.index) || 0);
+        if (existing) {
+          const { lines, mono } = payloadToLines(ev);
+          existing.lines = existing.lines.concat(
+            lines.filter((l) => !existing.lines.includes(l)),
+          );
+          if (mono) existing.mono = true;
+          existing.time = timeToDisplay(ev.time);
+          existing.status = ev.status === "fail" ? "error" : "done";
+        } else {
+          list.push(eventToCard(ev, i, i === lastIdx, loading));
+        }
+      } else {
+        list.push(eventToCard(ev, i, i === lastIdx, loading));
+      }
+    });
+    return list;
+  }, [steps, loading]);
 
   // 顶部 badge：flow 编排步骤进度 / 命令耗时
   const doneSteps = steps.filter((s) => s.type === "step_done").length;

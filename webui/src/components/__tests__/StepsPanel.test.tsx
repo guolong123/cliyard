@@ -141,8 +141,15 @@ describe("StepsPanel", () => {
     });
     renderPanel();
 
-    // step_start + step_done 各渲染一个「步骤 1 · check_user」标题
-    expect(screen.getAllByText("步骤 1 · check_user")).toHaveLength(2);
+    // step_start + step_done 合并为一张「步骤 1 · check_user」卡片（不重复展示），
+    // 卡片内容 = use 行 + 结果行（elapsed / result_preview）
+    expect(screen.getAllByText("步骤 1 · check_user")).toHaveLength(1);
+    const mergedPre = [...document.querySelectorAll("pre")].find((p) =>
+      p.textContent?.includes("use: user.list"),
+    );
+    expect(mergedPre).toBeTruthy();
+    expect(mergedPre?.textContent).toContain("elapsed = 94ms");
+    expect(mergedPre?.textContent).toContain('{"found_users": []}');
     expect(screen.getByTestId("steps-badge")).toHaveTextContent("编排步骤 1/1");
   });
 

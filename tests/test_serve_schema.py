@@ -92,8 +92,12 @@ def test_command_tree_two_level_grouping_with_groups_yaml(tmp_path):
     assert set(c["name"] for c in resources["manage"]["commands"]) == {"list", "create"}
     assert set(c["name"] for c in resources["type"]["commands"]) == {"list"}
 
-    # 兼容字段 commands 保留拍平全部命令（按资源出现顺序，同名方法重复出现）
-    assert [c["name"] for c in target["commands"]] == ["list", "create", "list"]
+    # 兼容字段 commands：两级组以 资源名.方法名 消歧，同名方法不再重复展示
+    assert [c["name"] for c in target["commands"]] == [
+        "manage.list",
+        "manage.create",
+        "type.list",
+    ]
 
 
 def test_command_tree_group_desc_fallback_to_resource(tmp_path):
