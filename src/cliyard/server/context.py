@@ -23,6 +23,7 @@ def build_service_context(
     spec_dir: str,
     service: dict[str, Any],
     resource: dict[str, Any] | None = None,
+    base_url_override: str | None = None,
 ) -> ServiceContext:
     """构造与 runner.py 一致的 :class:`ServiceContext`。
 
@@ -30,6 +31,9 @@ def build_service_context(
         spec_dir: Spec 目录路径（仅用于日志/错误场景，不参与解析）。
         service: :func:`cliyard.engine.loader.load_service` 的返回值。
         resource: 可选资源 spec（``server`` 字段触发资源级 server 覆盖）。
+        base_url_override: 显式 base_url 覆盖（同 CLI ``--server``），优先级
+            高于 ``<SERVICE>_SERVER`` / ``CLIYARD_SERVER`` 环境变量（复用
+            runner 的 ``_resolve_base_url_override`` 解析链）。
 
     Returns:
         配置好 ``base_url`` / ``prefix`` / ``auth_spec`` / ``pre_filled_auth``
@@ -48,8 +52,9 @@ def build_service_context(
     if servers:
         default_server = servers.get(default_server_name) or next(iter(servers.values()), {})
 
-    # 优先级：runtime override > saved profile endpoint > spec base_url
-    runtime_override = _resolve_base_url_override(service_name, None)
+    # 优先级：runtime override（显式参数 > <SERVICE>_SERVER / CLIYARD_SERVER env）
+    # > saved profile endpoint > spec base_url
+    runtime_override = _resolve_base_url_override(service_name, base_url_override)
     saved_profile = get_current_profile(service=service_id)
     saved_endpoints: dict[str, str] = saved_profile.get("endpoints", {}) if saved_profile else {}
     saved_endpoint = saved_profile.get("endpoint") if saved_profile else None

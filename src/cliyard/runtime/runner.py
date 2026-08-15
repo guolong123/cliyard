@@ -318,6 +318,11 @@ def create_cli(
 
     cli.add_command(build_server_command(str(spec_path)))
 
+    # ``mcp`` sub-command: starts this CLI as an MCP server (stdio default).
+    from cliyard.runtime.mcp_command import build_mcp_command
+
+    cli.add_command(build_mcp_command(str(spec_path)))
+
     return cli
 
 

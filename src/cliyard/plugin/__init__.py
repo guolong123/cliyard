@@ -160,6 +160,15 @@ class PluginRegistry:
         cls._step_types.clear()
         cls._output_formats.clear()
         cls._loaded = False
+        # 失效插件发现缓存：clear() 后允许目录/入口点被重新发现，
+        # 否则先前已扫描目录（如 examples/demo/plugins）会因 _scanned_dirs
+        # 残留而跳过重扫，导致类型/钩子等注册丢失（函数内导入避免循环依赖）。
+        try:
+            from cliyard.plugin.discovery import _scanned_dirs
+
+            _scanned_dirs.clear()
+        except Exception:  # pragma: no cover
+            pass
 
 
 # ---------------------------------------------------------------------------
