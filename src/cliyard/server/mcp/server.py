@@ -88,7 +88,7 @@ def create_mcp_server(
     *,
     server_override: str | None = None,
     name: str | None = None,
-    version: str = "0.12.0",
+    version: str = "0.12.1",
 ) -> MCPServer:
     """构建 spec 对应的低层 MCP Server（工具动态注册自命令树）。
 
@@ -225,7 +225,7 @@ def run_mcp_server(
     server_override: str | None = None,
     token: str | None = None,
     allow_remote_no_auth: bool = False,
-    version: str = "0.12.0",
+    version: str = "0.12.1",
 ) -> None:
     """启动 MCP Server。
 
