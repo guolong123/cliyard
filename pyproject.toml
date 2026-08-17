@@ -1,7 +1,7 @@
 [project]
 name = "cliyard"
 version = "0.9.1"
-description = "YAML-driven CLI framework — turn any REST API into CLI commands"
+description = "YAML-driven CLI framework 鈥?turn any REST API into CLI commands"
 authors = [
     {name = "keta", email = "dev@ketaops.cc"},
 ]
@@ -26,6 +26,7 @@ dependencies = [
     "jinja2~=3.1",
     "rich>=13.7.0",
     "jsonpath-ng~=1.7.0",
+    "mcp>=2.0.0",
 ]
 
 [project.urls]
