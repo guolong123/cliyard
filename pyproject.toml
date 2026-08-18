@@ -1,7 +1,7 @@
 [project]
 name = "cliyard"
 version = "0.12.2"
-description = "YAML-driven CLI framework — turn any REST API into CLI commands"
+description = "YAML-driven CLI framework 鈥?turn any REST API into CLI commands"
 authors = [
     {name = "keta", email = "dev@ketaops.cc"},
 ]
@@ -30,15 +30,8 @@ dependencies = [
     "uvicorn[standard]>=0.52.0",
     "sse-starlette>=3.4.0",
     "python-multipart>=0.0.30",
+    "mcp>=2.0.0",
 ]
-
-# 可选依赖：MCP Server 启动能力（cliyard mcp）。官方 mcp Python SDK 仅作为
-# optional extra 引入，不污染核心依赖（cliyard serve / CLI 无需安装）。
-# 版本锁定 mcp~=2.0.0：2.x 引入低层 Server + Streamable HTTP 的统一 API，
-# 代码按 2.0.x 接口实现（低层 Server.on_list_tools/on_call_tool +
-# streamable_http_app / stdio_server）。
-[project.optional-dependencies]
-mcp = ["mcp~=2.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/guolong123/cliyard"
@@ -47,9 +40,9 @@ Repository = "https://github.com/guolong123/cliyard.git"
 [project.scripts]
 cliyard = "cliyard.cli.__main__:main"
 
-# 前端产物（src/cliyard/server/webui/dist/）随 wheel 分发，
-# 使 `cliyard serve` 在 PyPI 安装场景下无需本地前端构建。
-# 构建产物由 scripts/build-webui.sh 在发布前生成并提交进仓库。
+# 鍓嶇浜х墿锛坰rc/cliyard/server/webui/dist/锛夐殢 wheel 鍒嗗彂锛?
+# 浣?`cliyard serve` 鍦?PyPI 瀹夎鍦烘櫙涓嬫棤闇€鏈湴鍓嶇鏋勫缓銆?
+# 鏋勫缓浜х墿鐢?scripts/build-webui.sh 鍦ㄥ彂甯冨墠鐢熸垚骞舵彁浜よ繘浠撳簱銆?
 [tool.setuptools.package-data]
 cliyard = ["server/webui/**/*"]
 
