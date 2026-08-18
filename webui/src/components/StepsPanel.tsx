@@ -41,6 +41,7 @@ const EVENT_TITLES: Record<string, string> = {
   step_start: "步骤开始",
   step_done: "步骤结束",
   flow_end: "流程结束",
+  step_echo: "消息",
 };
 
 type StepStatus = "done" | "running" | "error";
@@ -119,6 +120,9 @@ function payloadToLines(event: ExecutionEvent): { lines: string[]; mono: boolean
           ? event.output_preview
           : formatValue(event.output_preview);
       return { lines: preview.split("\n"), mono: true };
+    }
+    case "step_echo": {
+      return { lines: [String(event.message ?? "")], mono: false };
     }
     case "done": {
       return { lines: [`status = ${String(event.status)} · 耗时 ${String(event.duration_ms)}ms`], mono: false };
