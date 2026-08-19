@@ -309,7 +309,13 @@ def execute_use_step(
         resource_name=resource_spec.get("name", ""),
         http_client=context.http_client,
         raw_response=True,
+        event_cb=context.step_cb,
     )
+
+    # Emit a format event for the web UI when the method has output.items_path
+    # (same logic as execute_pipeline's non-raw path, but run here because
+    #  raw_response=True short-circuits before the format event emission).
+    _emit_format_event(context.step_cb, method_spec, data)
 
     # Extract specific fields if configured in step.extract
     if step.extract and isinstance(data, dict):
@@ -328,6 +334,54 @@ def execute_use_step(
         return extracted
 
     return data
+
+
+def _emit_format_event(
+    step_cb: Callable[[str, dict], None] | None,
+    method_spec: dict[str, Any],
+    data: Any,
+) -> None:
+    """Emit a ``format`` event (with optional ``table``) for the web UI.
+
+    Mirrors the format-event logic in ``execute_pipeline`` (builder.py
+    lines 506-512) so that flow ``use:`` steps also deliver structured
+    table data to the frontend.  No-op when *step_cb* is ``None``,
+    *method_spec* has no ``output.items_path``, or the data doesn't
+    contain table-shaped items + fields.
+    """
+    if step_cb is None:
+        return
+    output_spec = method_spec.get("output", {})
+    items_path = output_spec.get("items_path")
+    if not items_path or not isinstance(data, (dict, list)):
+        return
+
+    from cliyard.output.handler import parse_response
+    from cliyard.engine.hooks import run_post_response_hooks
+    from cliyard.engine.builder import _build_table_payload, _json_preview
+
+    hooks_config = method_spec.get("hooks", {})
+    resp_data = data
+    _raw_hooks = hooks_config.get("before-extract", [])
+    if _raw_hooks:
+        resp_data = run_post_response_hooks(_raw_hooks, resp_data)
+
+    try:
+        parsed = parse_response(resp_data, output_spec)
+    except Exception:
+        return
+
+    _fmt_hooks = hooks_config.get("before-format", [])
+    if _fmt_hooks:
+        parsed = run_post_response_hooks(_fmt_hooks, parsed)
+
+    format_payload: dict[str, Any] = {
+        "output_preview": _json_preview(redact_sensitive(parsed)),
+    }
+    table_payload = _build_table_payload(parsed)
+    if table_payload is not None:
+        format_payload["table"] = table_payload
+    _emit_step(step_cb, "format", format_payload)
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +452,7 @@ def execute_echo_action(message: str, context: FlowContext, color: str = "green"
     template_ctx = _build_template_context(context)
     rendered = resolve_template(message, template_ctx)
     context.console.print(f"[{color}]{rendered}[/{color}]")
+    _emit_step(context.step_cb, "step_echo", {"message": rendered, "color": color})
 
 
 def execute_action(
@@ -561,10 +616,14 @@ def _execute_action_item(
             result, _ = _execute_step(sub_step, context)
             context.step_state[step_id] = result
             _emit_step(context.step_cb, "step_done", {
+                "index": 0,
                 "step_id": step_id,
                 "label": item.get("description", step_id),
                 "status": "ok",
-                "result": result,
+                "use": sub_step.use or "",
+                "elapsed_ms": 0,
+                "result_preview": _step_result_preview(result),
+                "params_preview": _step_result_preview(resolved) if resolved else "",
             })
             if getattr(context, "verbose", False) or sub_step.show_response:
                 _show_sub_step_details(
@@ -719,6 +778,7 @@ def _execute_for_each(step, context: FlowContext) -> list:
             pre_filled_auth=context.pre_filled_auth,
             _current_flow=context._current_flow,
             verbose=context.verbose,
+            step_cb=context.step_cb,
         )
 
         iter_results: dict[str, Any] = {}
@@ -875,6 +935,35 @@ def _execute_until(
 # ---------------------------------------------------------------------------
 
 
+def _make_plugin_console(console, step_cb):
+    """Wrap rich Console so .print() also emits step_echo events.
+
+    Creates a NEW Console with the same settings — does NOT mutate
+    the original, so it never produces duplicate step_echo events
+    from other code paths that already emit them explicitly.
+    """
+    import types as _types
+    from rich.console import Console as _RichConsole
+
+    # Build a fresh Console mirroring the original's key settings
+    _plugin_console = _RichConsole(
+        soft_wrap=getattr(console, "soft_wrap", True),
+        force_terminal=getattr(console, "force_terminal", None),
+        color_system=getattr(console, "color_system", None),
+    )
+    _original_print = _plugin_console.print
+
+    def _wrapped_print(self, *args, **kwargs):
+        _original_print(*args, **kwargs)
+        if step_cb is not None:
+            text = " ".join(str(a) for a in args if not isinstance(a, (list, dict)))
+            if text.strip():
+                _emit_step(step_cb, "step_echo", {"message": text.strip(), "color": kwargs.get("style", "default")})
+
+    _plugin_console.print = _types.MethodType(_wrapped_print, _plugin_console)
+    return _plugin_console
+
+
 def _execute_plugin_step(step, context: FlowContext) -> dict:
     """Execute a plugin step registered via ``@register_step_type``.
 
@@ -910,7 +999,8 @@ def _execute_plugin_step(step, context: FlowContext) -> dict:
         "flow_params": context.flow_params,
         "step_state": context.step_state,
         "http_client": context.http_client,
-        "console": context.console,
+        "console": _make_plugin_console(context.console, context.step_cb),
+        "step_cb": context.step_cb,
     }
 
     template_ctx = _build_template_context(context)
@@ -1289,7 +1379,7 @@ def run_flow(
     from cliyard.client.auth import run_auth_chain
     from cliyard.client.http import HttpClient
 
-    console = Console(soft_wrap=True)
+    console = Console(soft_wrap=True, force_terminal=False, no_color=True)
 
     # Create shared HTTP client
     _base = server_override or service_ctx.base_url
@@ -1351,14 +1441,17 @@ def run_flow(
         # --- on_step_start hooks ---
         _trigger_step_hooks("on_step_start", step, context)
 
-        _emit_step(
-            step_cb,
-            "step_start",
-            {"index": step_index, "id": step.id, "label": label, "use": step.use},
-        )
-
         try:
             result, resolved_params = _execute_step(step, context)
+
+            # Emit step_start AFTER _execute_step so that pipeline events
+            # (validate/auth/request/response/format from execute_use_step)
+            # appear BEFORE the merged step card in the frontend timeline.
+            _emit_step(
+                step_cb,
+                "step_start",
+                {"index": step_index, "id": step.id, "label": label, "use": step.use},
+            )
 
             # Store result in step_state for subsequent steps
             context.step_state[step.id] = result
@@ -1390,8 +1483,10 @@ def run_flow(
                     "id": step.id,
                     "label": label,
                     "status": "ok",
+                    "use": step.use or "",
                     "elapsed_ms": int(_elapsed * 1000),
                     "result_preview": _step_result_preview(result),
+                    "params_preview": _step_result_preview(resolved_params) if resolved_params else "",
                 },
             )
 
@@ -1422,6 +1517,11 @@ def run_flow(
             _show_flow_summary(console, step_results, "failed")
             _emit_step(
                 step_cb,
+                "step_start",
+                {"index": step_index, "id": step.id, "label": label, "use": step.use},
+            )
+            _emit_step(
+                step_cb,
                 "step_done",
                 {
                     "index": step_index,
@@ -1446,6 +1546,11 @@ def run_flow(
             step_results.append({"id": step.id, "label": label, "status": "fail"})
             _trigger_flow_hooks("on_failure", context)
             _show_flow_summary(console, step_results, "failed")
+            _emit_step(
+                step_cb,
+                "step_start",
+                {"index": step_index, "id": step.id, "label": label, "use": step.use},
+            )
             _emit_step(
                 step_cb,
                 "step_done",

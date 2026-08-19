@@ -29,20 +29,6 @@ export interface StepsPanelProps {
   onReExecute: (executionId?: string) => void;
 }
 
-/** 事件类型 → 中文标题 */
-const EVENT_TITLES: Record<string, string> = {
-  validate: "参数校验",
-  auth: "认证准备",
-  request: "发送请求",
-  response: "等待响应",
-  format: "格式化结果",
-  done: "完成",
-  error: "错误",
-  step_start: "步骤开始",
-  step_done: "步骤结束",
-  flow_end: "流程结束",
-};
-
 type StepStatus = "done" | "running" | "error";
 
 interface StepCard {
@@ -51,13 +37,28 @@ interface StepCard {
   time: string;
   status: StepStatus;
   isDoneEvent: boolean;
-  lines: string[];
-  mono: boolean;
-  /** format 事件的结构化表格数据（有 table 时渲染表格视图，可切换 JSON） */
+  /** 始终可见的使用/耗时/结果行 */
+  summaryLines: string[];
+  /** 输入参数键值对（参数详情区域） */
+  paramsEntries: [string, string][];
+  /** pipeline 事件列表（请求详情区域） */
+  pipelineEvents: ExecutionEvent[];
+  /** echo 日志（日志区域） */
+  logs: string[];
+  /** format 事件的结构化表格数据 */
   table?: TableData;
+  /** format 事件的 JSON 预览行 */
+  formatLines: string[];
+  /** 内嵌的文本表格（如 rich Table 字符串） */
+  tableString?: string;
 }
 
-/** 值渲染：对象/数组 → JSON 单行，其他 → 原样 */
+/** ISO 时间 → "HH:MM:SS.mmm" */
+function timeToDisplay(iso: string): string {
+  return iso.length >= 23 ? iso.slice(11, 23) : iso;
+}
+
+/** 值 → 单行字符串 */
 function formatValue(v: unknown): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "object") {
@@ -70,299 +71,171 @@ function formatValue(v: unknown): string {
   return String(v);
 }
 
-/** ISO 时间 → "HH:MM:SS.mmm"（对齐原型步骤时间样式） */
-function timeToDisplay(iso: string): string {
-  return iso.length >= 23 ? iso.slice(11, 23) : iso;
+/** Clean rich markup tags from echo messages */
+function cleanEcho(msg: string): string {
+  return msg.replace(/\[.*?\]/g, "").trim();
 }
 
-/** 事件 payload → 内容行（对齐原型步骤 body） */
-function payloadToLines(event: ExecutionEvent): { lines: string[]; mono: boolean } {
-  switch (event.type) {
+/** Parse a JSON preview string into flat key-value entries */
+function parsePreviewToEntries(preview: string, maxLen = 500): [string, string][] {
+  if (!preview || preview === "{}" || preview === "null" || preview === "undefined") return [];
+  try {
+    const obj = JSON.parse(preview);
+    if (typeof obj !== "object" || obj === null) return [];
+    const entries: [string, string][] = [];
+    for (const [k, v] of Object.entries(obj)) {
+      const vs = formatValue(v);
+      if (vs && vs !== "null" && vs !== "undefined") {
+        entries.push([k, vs.length > maxLen ? vs.slice(0, maxLen) + "…" : vs]);
+      }
+    }
+    return entries;
+  } catch {
+    return [["", preview.length > maxLen ? preview.slice(0, maxLen) + "…" : preview]];
+  }
+}
+
+/** pipeline 事件 → 一行文本 */
+function pipelineToLine(ev: ExecutionEvent): string {
+  switch (ev.type) {
     case "validate": {
-      const params = event.params as Record<string, Record<string, unknown>> | undefined;
-      if (!params || typeof params !== "object") return { lines: [], mono: false };
-      const rows = Object.entries(params).flatMap(([loc, kv]) =>
-        kv && typeof kv === "object"
-          ? Object.entries(kv).map(([k, v]) => `${loc}.${k} = ${formatValue(v)}`)
-          : [],
-      );
-      return { lines: [`已绑定 ${rows.length} 个参数：`, ...rows.map((l) => `  ${l}`)], mono: false };
+      const params = ev.params as Record<string, Record<string, unknown>> | undefined;
+      if (!params || typeof params !== "object") return "参数校验";
+      const count = Object.values(params).reduce((s, kv) => s + (kv && typeof kv === "object" ? Object.keys(kv).length : 0), 0);
+      return `参数校验（${count} 个参数）`;
     }
     case "auth": {
-      const mode = formatValue(event.mode) || "chain";
-      const prefilled = Array.isArray(event.pre_filled_keys)
-        ? (event.pre_filled_keys as string[]).join(", ")
-        : "";
-      return { lines: [`认证模式: ${mode}${prefilled ? ` · 预填: ${prefilled}` : ""}`], mono: false };
+      const mode = formatValue(ev.mode) || "chain";
+      const pf = Array.isArray(ev.pre_filled_keys) ? (ev.pre_filled_keys as string[]).join(",") : "";
+      return `认证准备（${mode}${pf ? ` · 预填: ${pf}` : ""}）`;
     }
     case "request": {
-      const lines = [`${String(event.method ?? "GET")} ${String(event.url ?? "")}`];
-      const headers = event.headers as Record<string, unknown> | undefined;
-      if (headers && typeof headers === "object" && Object.keys(headers).length) {
-        lines.push(...Object.entries(headers).map(([k, v]) => `${k}: ${formatValue(v)}`));
-      }
-      const qp = event.query_params as Record<string, unknown> | undefined;
-      if (qp && typeof qp === "object" && Object.keys(qp).length) {
-        lines.push(`query: ${JSON.stringify(qp)}`);
-      }
-      if (event.body !== undefined && event.body !== null && event.body !== "") {
-        lines.push(`body: ${formatValue(event.body)}`);
-      }
-      return { lines, mono: true };
+      return `发送请求 ${String(ev.method ?? "GET")} ${String(ev.url ?? "")}`;
     }
     case "response": {
-      return { lines: [`HTTP ${String(event.status_code ?? "?")} · ${String(event.elapsed_ms ?? "?")}ms`], mono: false };
+      return `等待响应 HTTP ${String(ev.status_code ?? "?")} · ${String(ev.elapsed_ms ?? "?")}ms`;
     }
     case "format": {
-      const preview =
-        typeof event.output_preview === "string"
-          ? event.output_preview
-          : formatValue(event.output_preview);
-      return { lines: preview.split("\n"), mono: true };
+      return "格式化结果";
     }
-    case "done": {
-      return { lines: [`status = ${String(event.status)} · 耗时 ${String(event.duration_ms)}ms`], mono: false };
-    }
-    case "error": {
-      return { lines: [String(event.message ?? "执行失败")], mono: false };
-    }
-    case "step_start": {
-      const use = formatValue(event.use);
-      return { lines: use ? [`use: ${use}`] : [], mono: false };
-    }
-    case "step_done": {
-      const lines: string[] = [];
-      const use = formatValue(event.use);
-      if (use) lines.push(`use: ${use}`);
-      if (event.elapsed_ms !== undefined) lines.push(`elapsed = ${String(event.elapsed_ms)}ms`);
-      const preview = formatValue(event.result_preview);
-      if (preview && preview !== "null" && preview !== "undefined") lines.push(preview);
-      return { lines, mono: true };
-    }
-    case "flow_end": {
-      return { lines: [`outcome = ${String(event.outcome)} · ${String(event.step_count)} 个步骤`], mono: false };
-    }
-    default: {
-      const rows = Object.entries(event)
-        .filter(([k]) => k !== "type" && k !== "time")
-        .map(([k, v]) => `${k} = ${formatValue(v)}`);
-      return { lines: rows, mono: false };
-    }
+    default:
+      return ev.type;
   }
 }
 
-/** 事件 → 步骤卡片（step_start/step_done 标题带序号，flow_end 等用中文映射） */
-function eventToCard(event: ExecutionEvent, index: number, isLast: boolean, loading: boolean): StepCard {
-  const stepIdx = event.index !== undefined ? Number(event.index) : 0;
-  const label = typeof event.label === "string" && event.label ? ` · ${event.label}` : "";
-  const title =
-    (event.type === "step_start" || event.type === "step_done") && stepIdx > 0
-      ? `步骤 ${stepIdx}${label}`
-      : (EVENT_TITLES[event.type] ?? event.type);
-  const { lines, mono } = payloadToLines(event);
-  const status: StepStatus = event.type === "error" ? "error" : isLast && loading ? "running" : "done";
-  const table =
-    event.type === "format" && event.table && event.table.columns.length > 0 && event.table.rows.length > 0
-      ? event.table
-      : undefined;
-  return {
-    key: `${index}-${event.type}`,
-    title,
-    time: timeToDisplay(event.time),
-    status,
-    isDoneEvent: event.type === "done",
-    lines,
-    mono,
-    table,
-  };
-}
+// ----- 折叠面板组件 -----
 
-/** 深色代码块行级语法着色（对齐原型 MonoLine：方法琥珀/URL 天蓝/JSON 键天蓝/字符串翠绿/数字琥珀） */
-function MonoLine({ line }: { line: string }) {
-  const reqM = line.match(/^([A-Z]{3,6})\s+(https?:\/\/\S+)(.*)$/);
-  if (reqM)
-    return (
-      <>
-        <span style={{ fontWeight: 600, color: "#FBBF24" }}>{reqM[1]}</span>
-        <span style={{ color: "#7DD3FC" }}> {reqM[2]}</span>
-        <span style={{ color: "#94A3B8" }}>{reqM[3]}</span>
-      </>
-    );
-  const kvM = line.match(/^(\s*"[\w-]+"\s*:\s*)(.*?)(,?)$/);
-  if (kvM) {
-    const val = kvM[2];
-    const valColor = val.startsWith('"')
-      ? "#6EE7B7"
-      : /^-?\d/.test(val)
-        ? "#FBBF24"
-        : val.includes("{") || val.includes("[")
-          ? "#7DD3FC"
-          : "#C4B5FD";
-    return (
-      <>
-        <span style={{ color: "#7DD3FC" }}>{kvM[1]}</span>
-        <span style={{ color: valColor }}>{kvM[2]}</span>
-        <span style={{ color: "#64748B" }}>{kvM[3]}</span>
-      </>
-    );
-  }
-  const headM = line.match(/^([\w-]+):\s+(.*)$/);
-  if (headM)
-    return (
-      <>
-        <span style={{ color: "#94A3B8" }}>{headM[1]}:</span>
-        <span style={{ color: "#E2E8F0" }}> {headM[2]}</span>
-      </>
-    );
-  return <>{line}</>;
-}
-
-/** 内容行渲染：mono=深色代码块（语法着色）/ 普通=浅色块（步骤说明） */
-function MonoBlock({ lines, mono }: { lines: string[]; mono: boolean }) {
-  if (mono)
-    return (
-      <pre
-        style={{
-          margin: 0,
-          overflowX: "auto",
-          overflowY: "auto",
-          backgroundColor: neutral[900],
-          padding: `${space.sm + 2}px ${space.md}px`,
-          fontFamily: fontFamily.mono,
-          fontSize: fontSize.xs,
-          lineHeight: 1.7,
-          color: "#6EE7B7",
-        }}
-      >
-        {lines.map((line, li) => (
-          <span key={li} style={{ display: "block", whiteSpace: "pre" }}>
-            <span
-              style={{
-                display: "inline-block",
-                width: 16,
-                marginRight: space.md,
-                textAlign: "right",
-                userSelect: "none",
-                color: neutral[600],
-              }}
-            >
-              {li + 1}
-            </span>
-            <MonoLine line={line} />
-          </span>
-        ))}
-      </pre>
-    );
+function CollapsiblePanel({
+  title,
+  count,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  count?: number;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <pre style={{ margin: 0, overflowX: "auto", overflowY: "auto", backgroundColor: neutral[50], padding: `${space.sm + 2}px ${space.md}px`, fontSize: fontSize.xs, lineHeight: 1.7, ...baseFont }}>
-      {lines.map((line, li) => (
+    <div style={{ marginTop: space.sm }}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: space.xs,
+          padding: `${space.xs}px ${space.sm}px`,
+          width: "100%",
+          border: `1px solid ${neutral[200]}`,
+          borderRadius: radius.md,
+          backgroundColor: neutral[50],
+          cursor: "pointer",
+          fontFamily: fontFamily.body,
+          fontSize: fontSize.xs,
+          color: neutral[500],
+          transition: "background-color .15s ease",
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = neutral[100]; }}
+        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = neutral[50]; }}
+      >
         <span
-          key={li}
           style={{
-            display: "block",
-            whiteSpace: "pre",
-            color: line.startsWith(" ") ? neutral[500] : neutral[700],
-            fontWeight: line.startsWith(" ") ? 400 : 500,
+            transform: open ? "rotate(90deg)" : "rotate(0deg)",
+            transition: "transform .15s ease",
+            fontSize: 10,
+            color: neutral[400],
           }}
         >
-          {line || "\u00A0"}
+          ▶
         </span>
-      ))}
-    </pre>
-  );
-}
-
-/** 结果表格：白底 + neutral-200 边框圆角，表头 alias，数据行 hover 高亮，溢出横向滚动 */
-function ResultTable({ columns, rows }: { columns: TableColumn[]; rows: string[][] }) {
-  return (
-    <div style={{ overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontFamily: fontFamily.mono, fontSize: fontSize.xs }}>
-          <thead>
-            <tr style={{ backgroundColor: neutral[50] }}>
-              {columns.map((c, ci) => (
-                <th
-                  key={ci}
-                  style={{
-                    textAlign: "left",
-                    padding: `${space.sm}px ${space.md}px`,
-                    borderBottom: `1px solid ${neutral[200]}`,
-                    fontWeight: 600,
-                    color: neutral[700],
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {c.alias}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, ri) => (
-              <tr key={ri} className="cliyard-table-row" style={{ borderBottom: `1px solid ${neutral[100]}` }}>
-                {row.map((cell, ci) => (
-                  <td key={ci} style={{ padding: `${space.sm}px ${space.md}px`, color: neutral[700], whiteSpace: "nowrap" }}>
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <span>
+          {title}
+          {count !== undefined ? `（${count}）` : ""}
+        </span>
+      </button>
+      {open && (
+        <div
+          style={{
+            padding: space.sm,
+            backgroundColor: neutral[900],
+            borderRadius: `0 0 ${radius.md}px ${radius.md}px`,
+            border: `1px solid ${neutral[200]}`,
+            borderTop: "none",
+            maxHeight: 300,
+            overflowY: "auto",
+          }}
+        >
+          {children}
+        </div>
+      )}
     </div>
   );
 }
 
-/** 格式化结果卡片主体：有 table 时表格/JSON 可切换（默认表格），JSON 回退到深色代码块 */
-function FormatCardBody({ table, lines }: { table: TableData; lines: string[] }) {
-  const [view, setView] = useState<"table" | "json">("table");
+/** 深色背景行 */
+function DarkLine({ text, dim }: { text: string; dim?: boolean }) {
   return (
-    <>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: `${space.xs}px ${space.sm}px`,
-          borderBottom: `1px solid ${neutral[200]}`,
-          backgroundColor: neutral[50],
-        }}
-      >
-        <span style={{ fontSize: fontSize.xs, color: neutral[500], ...baseFont }}>
-          {table.total !== undefined ? `共 ${String(table.total)} 条` : "表格视图"}
-        </span>
-        <div style={{ display: "flex", gap: space.xs }}>
-          {(["table", "json"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              data-testid={`format-view-${v}`}
-              data-active={view === v ? "true" : "false"}
-              onClick={() => setView(v)}
-              className="cliyard-text-btn"
-              style={{
-                padding: "1px 8px",
-                fontSize: fontSize.xs,
-                backgroundColor: view === v ? brand[50] : "transparent",
-                color: view === v ? brand[600] : neutral[500],
-                fontWeight: view === v ? 600 : 400,
-                borderRadius: radius.sm,
-              }}
-            >
-              {v === "table" ? "表格" : "JSON"}
-            </button>
-          ))}
-        </div>
-      </div>
-      {view === "table" ? (
-        <ResultTable columns={table.columns} rows={table.rows} />
-      ) : (
-        <MonoBlock lines={lines} mono />
-      )}
-    </>
+    <div
+      style={{
+        padding: "1px 0",
+        fontFamily: fontFamily.mono,
+        fontSize: fontSize.xs,
+        lineHeight: 1.6,
+        color: dim ? neutral[500] : neutral[300],
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-all",
+      }}
+    >
+      {text}
+    </div>
   );
 }
 
-/** 步骤状态图标：成功=绿实心圆勾 / 完成（done）=品牌蓝实心圆勾 / 失败=红× / 运行中=呼吸蓝点 */
+/** 参数键值对行 */
+function KVPair({ k, v }: { k: string; v: string }) {
+  return (
+    <div
+      style={{
+        padding: "1px 0",
+        fontFamily: fontFamily.mono,
+        fontSize: fontSize.xs,
+        lineHeight: 1.6,
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-all",
+      }}
+    >
+      <span style={{ color: "#7DD3FC" }}>{k}</span>
+      <span style={{ color: neutral[400] }}> = </span>
+      <span style={{ color: "#6EE7B7" }}>{v}</span>
+    </div>
+  );
+}
+
+// ----- 步骤卡片渲染 -----
+
+/** 步骤状态图标 */
 function StepIcon({ status, isDoneEvent }: { status: StepStatus; isDoneEvent?: boolean }) {
   const base: CSSProperties = {
     display: "flex",
@@ -388,25 +261,18 @@ function StepIcon({ status, isDoneEvent }: { status: StepStatus; isDoneEvent?: b
         <span
           aria-hidden
           style={{
-            width: 6,
-            height: 6,
-            borderRadius: "50%",
-            backgroundColor: brand[500],
+            width: 6, height: 6, borderRadius: "50%", backgroundColor: brand[500],
             animation: "cliyard-breathe 1.2s ease-in-out infinite",
           }}
         />
       </span>
     );
   return (
-    <span
-      data-testid="step-icon"
-      data-status="done"
-      style={{
-        ...base,
-        backgroundColor: isDoneEvent ? brand[500] : statusColors.success.color,
-        color: "#FFFFFF",
-      }}
-    >
+    <span data-testid="step-icon" data-status="done" style={{
+      ...base,
+      backgroundColor: isDoneEvent ? brand[500] : statusColors.success.color,
+      color: "#FFFFFF",
+    }}>
       <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
         <path d="M20 6 9 17l-5-5" />
       </svg>
@@ -414,33 +280,104 @@ function StepIcon({ status, isDoneEvent }: { status: StepStatus; isDoneEvent?: b
   );
 }
 
-/** 空态占位 */
 function EmptyState({ text }: { text: string }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: 160,
-        margin: space.lg,
-        borderRadius: radius.md,
-        border: `1px dashed ${neutral[200]}`,
-        backgroundColor: neutral[50],
-        color: neutral[400],
-        fontSize: fontSize.sm,
-        ...baseFont,
-      }}
-    >
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "center",
+      minHeight: 160, margin: space.lg, borderRadius: radius.md,
+      border: `1px dashed ${neutral[200]}`, backgroundColor: neutral[50],
+      color: neutral[400], fontSize: fontSize.sm, ...baseFont,
+    }}>
       {text}
     </div>
   );
 }
 
-/**
- * 右侧执行步骤面板：SSE 事件流 → 步骤时间线。
- * executionId 变化时重新订阅（done/error 自动收尾），卸载时断开。
- */
+// ----- Table 组件（复用现有逻辑） -----
+
+function ResultTable({ columns, rows }: { columns: TableColumn[]; rows: string[][] }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "collapse", width: "100%", fontFamily: fontFamily.mono, fontSize: fontSize.xs }}>
+        <thead>
+          <tr style={{ backgroundColor: neutral[50] }}>
+            {columns.map((c, ci) => (
+              <th key={ci} style={{
+                textAlign: "left", padding: `${space.sm}px ${space.md}px`,
+                borderBottom: `1px solid ${neutral[200]}`, fontWeight: 600,
+                color: neutral[700], whiteSpace: "nowrap",
+              }}>
+                {c.alias}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri} className="cliyard-table-row" style={{ borderBottom: `1px solid ${neutral[100]}` }}>
+              {row.map((cell, ci) => (
+                <td key={ci} style={{ padding: `${space.sm}px ${space.md}px`, color: neutral[700], whiteSpace: "nowrap" }}>
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FormatCardBody({ table, lines }: { table: TableData; lines: string[] }) {
+  const [view, setView] = useState<"table" | "json">("table");
+  return (
+    <>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: `${space.xs}px ${space.sm}px`, borderBottom: `1px solid ${neutral[200]}`,
+        backgroundColor: neutral[50],
+      }}>
+        <span style={{ fontSize: fontSize.xs, color: neutral[500], ...baseFont }}>
+          {table.total !== undefined ? `共 ${String(table.total)} 条` : "表格视图"}
+        </span>
+        <div style={{ display: "flex", gap: space.xs }}>
+          {(["table", "json"] as const).map((v) => (
+            <button
+              key={v} type="button"
+              data-testid={`format-view-${v}`}
+              data-active={view === v ? "true" : "false"}
+              onClick={() => setView(v)}
+              className="cliyard-text-btn"
+              style={{
+                padding: "1px 8px", fontSize: fontSize.xs,
+                backgroundColor: view === v ? brand[50] : "transparent",
+                color: view === v ? brand[600] : neutral[500],
+                fontWeight: view === v ? 600 : 400,
+                borderRadius: radius.sm,
+              }}
+            >
+              {v === "table" ? "表格" : "JSON"}
+            </button>
+          ))}
+        </div>
+      </div>
+      {view === "table" ? (
+        <ResultTable columns={table.columns} rows={table.rows} />
+      ) : (
+        <div style={{
+          padding: space.sm, backgroundColor: neutral[900],
+          fontFamily: fontFamily.mono, fontSize: fontSize.xs,
+          color: "#6EE7B7", maxHeight: 300, overflowY: "auto",
+        }}>
+          {lines.map((l, li) => <DarkLine key={li} text={l} />)}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ===== 主组件 =====
+
 export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps) {
   const [activeTab, setActiveTab] = useState<"steps" | "history">("steps");
   const [steps, setSteps] = useState<ExecutionEvent[]>([]);
@@ -448,7 +385,6 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
   const [copied, setCopied] = useState(false);
   const historyRef = useRef<HistoryPanelHandle>(null);
 
-  // 历史重放成功：切回「执行步骤」tab 并让父级订阅新 execution_id
   const handleHistoryReplay = useCallback(
     (newId: string) => {
       setActiveTab("steps");
@@ -468,39 +404,175 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
     return cancel;
   }, [executionId]);
 
-  // flow 步骤卡片按 index 合并 step_start/step_done：同一步骤只渲染一张卡，
-  // step_start 建立卡片（use 行 + running），step_done 追加结果行并置为 done/error。
+  // 核心合并逻辑：按事件流分段，每步骤一张卡
   const cards = useMemo(() => {
     const list: StepCard[] = [];
     const byIndex = new Map<number, StepCard>();
-    const lastIdx = steps.length - 1;
+
+    // 缓存当前步骤号，用于把 step_echo 归入正确步骤
+    let curStepIdx = 0;
+    // 缓存 step_start 之前的 pipeline 事件
+    const pendingPipeline: ExecutionEvent[] = [];
+
     steps.forEach((ev, i) => {
+      // 1) pipeline 事件（validate/auth/request/response/format 等，无 index）
+      if (!ev.type.startsWith("step_") && ev.type !== "flow_end" && ev.type !== "done" && ev.type !== "error") {
+        pendingPipeline.push(ev);
+        return;
+      }
+
+      // 2) flow_end / done → 跳过（不纳入步骤卡片）
+      if (ev.type === "flow_end" || ev.type === "done") {
+        return;
+      }
+
+      // 3) step_start → 创建新卡片，pendingPipeline 归入此步骤
       if (ev.type === "step_start") {
-        const card = eventToCard(ev, i, i === lastIdx, loading);
-        card.status = "running";
-        byIndex.set(Number(ev.index) || 0, card);
+        curStepIdx = Number(ev.index) || 0;
+        const label = typeof ev.label === "string" && ev.label ? ` · ${ev.label}` : "";
+        const title = curStepIdx > 0 ? `步骤 ${curStepIdx}${label}` : ev.type;
+const card: StepCard = {
+            key: `${i}-${curStepIdx}`,
+            title,
+            time: timeToDisplay(ev.time),
+            status: "running",
+            isDoneEvent: false,
+            summaryLines: ev.use ? [`use: ${String(ev.use)}`] : [],
+            paramsEntries: [],
+            pipelineEvents: [...pendingPipeline],
+            logs: [],
+            formatLines: [],
+            tableString: undefined,
+          };
+        pendingPipeline.length = 0; // 清空
+        byIndex.set(curStepIdx, card);
         list.push(card);
-      } else if (ev.type === "step_done") {
-        const existing = byIndex.get(Number(ev.index) || 0);
+        return;
+      }
+
+      // 4) step_done → 合并结果到已有卡片
+      if (ev.type === "step_done") {
+        const idx = Number(ev.index) || 0;
+        const existing = byIndex.get(idx);
         if (existing) {
-          const { lines, mono } = payloadToLines(ev);
-          existing.lines = existing.lines.concat(
-            lines.filter((l) => !existing.lines.includes(l)),
-          );
-          if (mono) existing.mono = true;
           existing.time = timeToDisplay(ev.time);
           existing.status = ev.status === "fail" ? "error" : "done";
+          // use/elapsed → summaryLines
+          const use = String(ev.use ?? "");
+          if (use && !existing.summaryLines.some(l => l.startsWith("use:"))) {
+            existing.summaryLines.unshift(`use: ${use}`);
+          }
+          if (ev.elapsed_ms !== undefined) {
+            const durLine = `耗时 ${String(ev.elapsed_ms)}ms`;
+            if (!existing.summaryLines.some(l => l.startsWith("耗时"))) {
+              existing.summaryLines.push(durLine);
+            }
+          }
+          // result_preview → summaryLines 底部 + 提取 table
+          const rp = String(ev.result_preview ?? "");
+          if (rp && rp !== "{}" && rp !== "null" && rp !== "undefined") {
+            try {
+              const parsed = JSON.parse(rp);
+              if (typeof parsed === "object" && parsed !== null) {
+                // 检测内嵌的 table 结构
+                const tbl = parsed.table;
+                if (tbl) {
+                  if (typeof tbl === "string" && tbl.length > 20) {
+                    // 文本表格（rich Table 渲染字符串）
+                    existing.tableString = tbl;
+                  } else if (typeof tbl === "object" && Array.isArray(tbl.columns) && tbl.columns.length > 0) {
+                    // 结构化表格数据
+                    existing.table = tbl as TableData;
+                    existing.formatLines = [JSON.stringify(parsed, null, 2)];
+                  }
+                }
+                // 拍平为非 table 的键值对
+                existing.summaryLines = existing.summaryLines.filter(l => !l.startsWith("code:") && !l.startsWith("msg:"));
+                for (const [k, v] of Object.entries(parsed)) {
+                  if (k === "table") continue;
+                  const vs = formatValue(v);
+                  if (vs && vs !== "null" && vs !== "undefined") {
+                    existing.summaryLines.push(`${k}: ${vs.length > 500 ? vs.slice(0, 500) + "…" : vs}`);
+                  }
+                }
+              }
+            } catch {
+              // fallback: 非 JSON 时直接用原文本
+              existing.summaryLines.push(rp);
+            }
+          }
+          // params_preview → 参数详情
+          const pp = String(ev.params_preview ?? "");
+          if (pp && pp !== "{}" && pp !== "null" && pp !== "undefined") {
+            existing.paramsEntries = parsePreviewToEntries(pp);
+          }
         } else {
-          list.push(eventToCard(ev, i, i === lastIdx, loading));
+          // fallback: step_done 没有对应 step_start（理论上不应发生）
+          const label = typeof ev.label === "string" && ev.label ? ` · ${ev.label}` : "";
+          const title = idx > 0 ? `步骤 ${idx}${label}` : ev.type;
+          const card: StepCard = {
+            key: `${i}-${idx}`,
+            title,
+            time: timeToDisplay(ev.time),
+            status: ev.status === "fail" ? "error" : "done",
+            isDoneEvent: false,
+            summaryLines: [],
+            paramsEntries: [],
+            pipelineEvents: [],
+            logs: [],
+            formatLines: [],
+          };
+          byIndex.set(idx, card);
+          list.push(card);
         }
-      } else {
-        list.push(eventToCard(ev, i, i === lastIdx, loading));
+        return;
       }
+
+      // 5) format → 收集 table 和 formatLines
+      if (ev.type === "format") {
+        // 归入当前最后一张卡片
+        const lastCard = list[list.length - 1];
+        if (lastCard && lastCard.status !== "done") {
+          // 仍在运行中，追加
+          if (ev.table && ev.table.columns.length > 0 && ev.table.rows.length > 0) {
+            lastCard.table = ev.table;
+          }
+          const preview = typeof ev.output_preview === "string" ? ev.output_preview : formatValue(ev.output_preview);
+          if (preview) {
+            lastCard.formatLines = preview.split("\n");
+          }
+          // 也作为 pipeline 事件
+          lastCard.pipelineEvents.push(ev);
+        } else {
+          pendingPipeline.push(ev);
+        }
+        return;
+      }
+
+      // 6) step_echo → 归入当前步骤的日志
+      if (ev.type === "step_echo") {
+        const msg = String(ev.message ?? "");
+        if (msg) {
+          const existing = byIndex.get(curStepIdx);
+          if (existing) {
+            existing.logs = [...existing.logs, cleanEcho(msg)];
+          } else {
+            // 兜底：放到最后一张卡片
+            const lastCard = list[list.length - 1];
+            if (lastCard) lastCard.logs = [...lastCard.logs, cleanEcho(msg)];
+          }
+        }
+        return;
+      }
+
+      // 7) error → 跳过（由 done 事件处理）
+      if (ev.type === "error") return;
     });
+
     return list;
   }, [steps, loading]);
 
-  // 顶部 badge：flow 编排步骤进度 / 命令耗时
+  // 顶部 badge
   const doneSteps = steps.filter((s) => s.type === "step_done").length;
   const maxStepIndex = steps.reduce((m, s) => {
     const idx = Number(s.index);
@@ -517,9 +589,9 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
         ? "执行中…"
         : "";
 
-  const copyText = cards
-    .map((c) => `[${c.time}] ${c.title}\n${c.lines.map((l) => `  ${l}`).join("\n")}`)
-    .join("\n\n");
+  const copyText = cards.map((c) =>
+    `[${c.time}] ${c.title}\n${c.summaryLines.map(l => `  ${l}`).join("\n")}`
+  ).join("\n\n");
 
   const handleCopy = () => {
     if (!copyText) return;
@@ -538,38 +610,24 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
 .cliyard-table-row:hover { background-color: ${neutral[50]}; }`}</style>
 
       {/* tab bar */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          borderBottom: `1px solid ${neutral[200]}`,
-          backgroundColor: neutral[50],
-          padding: `0 ${space.sm}px`,
-          borderRadius: `${radius.lg}px ${radius.lg}px 0 0`,
-        }}
-      >
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        borderBottom: `1px solid ${neutral[200]}`, backgroundColor: neutral[50],
+        padding: `0 ${space.sm}px`, borderRadius: `${radius.lg}px ${radius.lg}px 0 0`,
+      }}>
         <div style={{ display: "flex", alignItems: "flex-end" }}>
-          {(
-            [
-              { id: "steps", label: "执行步骤" },
-              { id: "history", label: "历史记录" },
-            ] as const
-          ).map((t) => (
+          {[
+            { id: "steps", label: "执行步骤" },
+            { id: "history", label: "历史记录" },
+          ].map((t) => (
             <button
-              key={t.id}
-              type="button"
-              data-testid="panel-tab"
+              key={t.id} type="button" data-testid="panel-tab"
               data-active={activeTab === t.id ? "true" : "false"}
-              onClick={() => setActiveTab(t.id)}
+              onClick={() => setActiveTab(t.id as "steps" | "history")}
               style={{
-                border: "none",
-                background: "transparent",
-                cursor: "pointer",
-                padding: `${space.md}px ${space.lg}px`,
-                marginBottom: -1,
-                fontSize: fontSize.md,
-                fontFamily: fontFamily.body,
+                border: "none", background: "transparent", cursor: "pointer",
+                padding: `${space.md}px ${space.lg}px`, marginBottom: -1,
+                fontSize: fontSize.md, fontFamily: fontFamily.body,
                 borderBottom: `2px solid ${activeTab === t.id ? brand[500] : "transparent"}`,
                 color: activeTab === t.id ? brand[600] : neutral[500],
                 fontWeight: activeTab === t.id ? 500 : 400,
@@ -583,18 +641,12 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
         {activeTab === "steps" ? (
           <div style={{ display: "flex", alignItems: "center", gap: space.sm, paddingBottom: space.sm, paddingRight: space.sm }}>
             {badge && (
-              <span
-                data-testid="steps-badge"
-                style={{
-                  borderRadius: radius.sm,
-                  backgroundColor: "#FFFFFF",
-                  padding: "2px 8px",
-                  fontFamily: fontFamily.mono,
-                  fontSize: fontSize.xs,
-                  color: neutral[500],
-                  border: `1px solid ${neutral[200]}`,
-                }}
-              >
+              <span data-testid="steps-badge" style={{
+                borderRadius: radius.sm, backgroundColor: "#FFFFFF",
+                padding: "2px 8px", fontFamily: fontFamily.mono,
+                fontSize: fontSize.xs, color: neutral[500],
+                border: `1px solid ${neutral[200]}`,
+              }}>
                 {badge}
               </span>
             )}
@@ -604,34 +656,16 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
             <button type="button" className="cliyard-text-btn" data-testid="copy-button" onClick={handleCopy}>
               {copied ? "已复制" : "复制"}
             </button>
-            <button
-              type="button"
-              className="cliyard-text-btn"
-              data-testid="clear-button"
-              onClick={() => {
-                setSteps([]);
-                setLoading(false);
-              }}
-            >
+            <button type="button" className="cliyard-text-btn" data-testid="clear-button" onClick={() => { setSteps([]); setLoading(false); }}>
               清空
             </button>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: space.sm, paddingBottom: space.sm, paddingRight: space.sm }}>
-            <button
-              type="button"
-              className="cliyard-outline-btn"
-              data-testid="clear-history-button"
-              onClick={() => void historyRef.current?.clear()}
-            >
+            <button type="button" className="cliyard-outline-btn" data-testid="clear-history-button" onClick={() => void historyRef.current?.clear()}>
               清空记录
             </button>
-            <button
-              type="button"
-              className="cliyard-outline-btn"
-              data-testid="refresh-history-button"
-              onClick={() => historyRef.current?.reload()}
-            >
+            <button type="button" className="cliyard-outline-btn" data-testid="refresh-history-button" onClick={() => historyRef.current?.reload()}>
               刷新
             </button>
           </div>
@@ -651,75 +685,110 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
                   )}
                   <StepIcon status={c.status} isDoneEvent={c.isDoneEvent} />
                   <div style={{ minWidth: 0, flex: 1 }}>
+                    {/* 标题行 */}
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: space.sm }}>
                       <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: c.status === "error" ? statusColors.error.color : neutral[800] }}>
                         {c.title}
                       </span>
-                      <span
-                        style={{
-                          borderRadius: radius.sm,
-                          backgroundColor: neutral[100],
-                          padding: "2px 6px",
-                          fontFamily: fontFamily.mono,
-                          fontSize: fontSize.xs,
-                          color: neutral[500],
-                        }}
-                      >
+                      <span style={{
+                        borderRadius: radius.sm, backgroundColor: neutral[100],
+                        padding: "2px 6px", fontFamily: fontFamily.mono,
+                        fontSize: fontSize.xs, color: neutral[500],
+                      }}>
                         {c.time}
                       </span>
                       {c.status === "error" && (
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: space.xs,
-                            padding: "1px 8px",
-                            borderRadius: radius.pill,
-                            backgroundColor: statusColors.error.bg,
-                            border: `1px solid ${statusColors.error.border}`,
-                            color: statusColors.error.color,
-                            fontSize: fontSize.xs,
-                            fontWeight: 500,
-                            ...baseFont,
-                          }}
-                        >
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", gap: space.xs,
+                          padding: "1px 8px", borderRadius: radius.pill,
+                          backgroundColor: statusColors.error.bg,
+                          border: `1px solid ${statusColors.error.border}`,
+                          color: statusColors.error.color, fontSize: fontSize.xs,
+                          fontWeight: 500, ...baseFont,
+                        }}>
                           失败
                         </span>
                       )}
                       {c.status === "running" && (
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: space.xs,
-                            padding: "1px 8px",
-                            borderRadius: radius.pill,
-                            backgroundColor: statusColors.running.bg,
-                            border: `1px solid ${statusColors.running.border}`,
-                            color: statusColors.running.color,
-                            fontSize: fontSize.xs,
-                            fontWeight: 500,
-                            ...baseFont,
-                          }}
-                        >
-                          <span
-                            aria-hidden
-                            style={{
-                              width: 5,
-                              height: 5,
-                              borderRadius: "50%",
-                              backgroundColor: statusColors.running.color,
-                              animation: "cliyard-breathe 1.2s ease-in-out infinite",
-                            }}
-                          />
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", gap: space.xs,
+                          padding: "1px 8px", borderRadius: radius.pill,
+                          backgroundColor: statusColors.running.bg,
+                          border: `1px solid ${statusColors.running.border}`,
+                          color: statusColors.running.color, fontSize: fontSize.xs,
+                          fontWeight: 500, ...baseFont,
+                        }}>
+                          <span aria-hidden style={{
+                            width: 5, height: 5, borderRadius: "50%",
+                            backgroundColor: statusColors.running.color,
+                            animation: "cliyard-breathe 1.2s ease-in-out infinite",
+                          }} />
                           执行中
                         </span>
                       )}
                     </div>
-                    {(c.lines.length > 0 || c.table) && (
-                      <div style={{ marginTop: space.sm, overflowY: "auto", maxHeight: 400, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF" }}>
-                        {c.table ? <FormatCardBody table={c.table} lines={c.lines} /> : <MonoBlock lines={c.lines} mono={c.mono} />}
+
+                    {/* 始终可见的摘要行 */}
+                    {c.summaryLines.length > 0 && (
+                      <div style={{ marginTop: space.sm }}>
+                        {c.summaryLines.map((l, li) => (
+                          <div key={li} style={{
+                            fontFamily: fontFamily.mono, fontSize: fontSize.xs,
+                            lineHeight: 1.6, color: neutral[700],
+                            whiteSpace: "pre-wrap", wordBreak: "break-all",
+                          }}>
+                            {l}
+                          </div>
+                        ))}
                       </div>
+                    )}
+
+                    {/* 表格（format 事件） */}
+                    {c.table && (
+                      <div style={{ marginTop: space.sm, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF" }}>
+                        <FormatCardBody table={c.table} lines={c.formatLines} />
+                      </div>
+                    )}
+
+                    {/* 文本表格（内嵌 table 字符串，如 rich Table 渲染结果） */}
+                    {c.tableString && (
+                      <div style={{ marginTop: space.sm, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[900], overflowX: "auto" }}>
+                        <pre style={{
+                          margin: 0, padding: space.sm,
+                          fontFamily: fontFamily.mono, fontSize: fontSize.xs,
+                          lineHeight: 1.4, color: "#6EE7B7",
+                          whiteSpace: "pre", minWidth: "fit-content",
+                        }}>
+                          {c.tableString}
+                        </pre>
+                      </div>
+                    )}
+
+                    {/* 参数详情（默认收起） */}
+                    {c.paramsEntries.length > 0 && (
+                      <CollapsiblePanel title="参数详情" count={c.paramsEntries.length}>
+                        {c.paramsEntries.map(([k, v], pi) => (
+                          <KVPair key={pi} k={k} v={v} />
+                        ))}
+                      </CollapsiblePanel>
+                    )}
+
+                    {/* 请求详情（默认收起） */}
+                    {c.pipelineEvents.length > 0 && (
+                      <CollapsiblePanel title="请求详情" count={c.pipelineEvents.length}>
+                        {c.pipelineEvents.map((pe, pi) => (
+                          <DarkLine key={pi} text={pipelineToLine(pe)} dim={pe.type === "validate" || pe.type === "auth"} />
+                        ))}
+                      </CollapsiblePanel>
+                    )}
+
+                    {/* 日志（默认收起） */}
+                    {c.logs.length > 0 && (
+                      <CollapsiblePanel title="日志" count={c.logs.length}>
+                        {c.logs.map((log, li) => (
+                          <DarkLine key={li} text={log} />
+                        ))}
+                      </CollapsiblePanel>
                     )}
                   </div>
                 </li>
@@ -732,8 +801,6 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
           <HistoryPanel ref={historyRef} onReExecute={handleHistoryReplay} />
         </div>
       )}
-
-
     </section>
   );
 }
