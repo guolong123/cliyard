@@ -305,16 +305,9 @@ def create_cli(
             for f in flows:
                 grouped[f.category or "其他"].append(f)
 
-            # category → 中文名映射
-            cat_labels = {
-                "supplier-introduce": "供应商引入",
-                "eco-inquiry": "生态询价",
-                "csp-data": "CSP 数据",
-                "fmp": "FMP 同步",
-            }
-
             for cat, cat_flows in grouped.items():
-                label = cat_labels.get(cat, cat)
+                # 取组内第一个 flow 的 category_label 作为组名
+                label = cat_flows[0].category_label or cat
                 table = Table(title=f"[{label}]", box=None, show_header=False, padding=(0, 2))
                 for f in cat_flows:
                     desc = f.description or ""

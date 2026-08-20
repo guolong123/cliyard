@@ -201,6 +201,7 @@ def load_flows(spec_dir: str | Path) -> list[FlowSpec]:
             command=fdict["command"],
             description=fdict.get("description", ""),
             category=fdict.get("category", ""),
+            category_label=fdict.get("category_label", ""),
             labels=fdict.get("labels", []),
             params=fdict.get("params", {}),
             steps=steps,

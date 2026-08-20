@@ -253,6 +253,7 @@ def build_command_tree(spec_dir: str | Path) -> dict[str, Any]:
                 "description": flow.description,
                 "command": flow.command,
                 "category": flow.category,
+                "category_label": flow.category_label,
                 "labels": flow.labels,
                 "params_schema": build_flow_schema(flow.params, title=flow.command),
                 "step_count": len(flow.steps),
