@@ -41,13 +41,7 @@ function flowParamCount(flow: Flow): number {
   return props && typeof props === "object" ? Object.keys(props).length : 0;
 }
 
-/** category 英文标识 → 中文显示名 */
-const categoryLabels: Record<string, string> = {
-  "supplier-introduce": "供应商引入",
-  "eco-inquiry": "生态询价",
-  "csp-data": "CSP 数据",
-  "fmp": "FMP 同步",
-};
+/** category 标签由后端 API 通过 category_label 透传，前端不再硬编码 */
 
 /** 树项/flow 项的 hover 与选中样式（token 值注入，前缀 cliyard- 避免污染） */
 const treeCss = `
@@ -249,7 +243,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
     () =>
       spec.flows.filter((f) => {
         const cat = f.category || "";
-        const catZh = categoryLabels[cat] || "";
+        const catZh = f.category_label || "";
         return (
           f.name.toLowerCase().includes(q) ||
           f.description.toLowerCase().includes(q) ||
@@ -553,7 +547,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
           {groupedFlows.map(([cat, flows]) => {
-            const catLabel = categoryLabels[cat] || cat;
+            const catLabel = flows[0]?.category_label || cat;
             const expanded = effectiveExpandedFlowGroups.has(cat);
             return (
               <div key={cat}>

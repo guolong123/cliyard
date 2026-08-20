@@ -41,6 +41,7 @@ export interface Flow {
   description: string;
   command: string;
   category: string;
+  category_label: string;
   labels: string[];
   params_schema: Record<string, unknown>;
   step_count: number;
@@ -101,12 +102,22 @@ export interface AuthProfile {
   name: string;
   endpoint: string;
   token_masked: string;
-  expires_at?: string;
+  expires_at?: number;
+  auth_username?: string;
 }
 
 export interface ProfileList {
   current: AuthProfile | null;
   profiles: AuthProfile[];
+}
+
+/** GET /api/auth/environments 响应 */
+export interface EnvPreset {
+  name: string;
+  endpoint: string;
+  endpoints?: Record<string, string>;
+  default_username?: string;
+  default_password?: string;
 }
 
 /* ---------------------------------- 内部工具 ---------------------------------- */
@@ -228,4 +239,36 @@ export function getProfiles(): Promise<ProfileList> {
 /** POST /api/auth/switch：切换当前 profile */
 export function switchProfile(name: string): Promise<{ current: string }> {
   return request<{ current: string }>("/api/auth/switch", jsonInit("POST", { profile: name }));
+}
+
+/** POST /api/auth/login：登录并保存 profile */
+export function loginAuth(body: {
+  username: string;
+  password: string;
+  endpoint: string;
+  endpoints?: Record<string, string>;
+  profile_name?: string;
+}): Promise<{ profile: string; expires_at?: number }> {
+  return request<{ profile: string; expires_at?: number }>("/api/auth/login", jsonInit("POST", body));
+}
+
+/** POST /api/auth/refresh：续签指定 profile */
+export function refreshAuth(profile: string, password?: string): Promise<{ profile: string; expires_at?: number }> {
+  return request<{ profile: string; expires_at?: number }>(
+    "/api/auth/refresh",
+    jsonInit("POST", { profile, password }),
+  );
+}
+
+/** DELETE /api/auth/profile：删除指定 profile */
+export function deleteAuth(profile: string): Promise<{ deleted: string; auto_switched_to?: string }> {
+  return request<{ deleted: string; auto_switched_to?: string }>(
+    `/api/auth/profile?profile=${encodeURIComponent(profile)}`,
+    { method: "DELETE" },
+  );
+}
+
+/** GET /api/auth/environments：读取 spec 目录的环境预设 */
+export function fetchEnvironments(): Promise<{ environments: EnvPreset[] }> {
+  return request<{ environments: EnvPreset[] }>("/api/auth/environments");
 }
