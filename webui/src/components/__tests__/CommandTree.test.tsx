@@ -39,6 +39,7 @@ const spec: SpecData = {
       description: "新增用户（查→判→创→验）",
       command: "add-user",
       category: "eco-inquiry",
+      category_label: "生态询价",
       labels: [],
       params_schema: { type: "object", properties: { name: {} } },
       step_count: 4,
@@ -147,6 +148,7 @@ const dupGroupSpec: SpecData = {
       description: "新增用户",
       command: "add-user",
       category: "",
+      category_label: "",
       labels: [],
       params_schema: { type: "object", properties: {} },
       step_count: 2,
@@ -424,5 +426,37 @@ describe("CommandTree 分组折叠/展开", () => {
     // 展开第一个
     fireEvent.click(headers[0]);
     expect(screen.getAllByTestId("tree-item")).toHaveLength(1);
+  });
+
+  it("Flow Tab：默认显示分组头部（flow-group-header）", () => {
+    render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
+    // 切到 Flow Tab
+    const flowTab = screen.getByText("Flow");
+    fireEvent.click(flowTab);
+    expect(screen.getByTestId("flow-group-header")).toBeInTheDocument();
+  });
+
+  it("Flow Tab：默认折叠，flow-item 不可见", () => {
+    render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByText("Flow"));
+    expect(screen.queryAllByTestId("flow-item")).toHaveLength(0);
+  });
+
+  it("Flow Tab：点击分组头展开，flow-item 可见", () => {
+    render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByText("Flow"));
+    const header = screen.getByTestId("flow-group-header");
+    fireEvent.click(header);
+    expect(screen.getAllByTestId("flow-item")).toHaveLength(1);
+    expect(screen.getByText("add-user")).toBeInTheDocument();
+  });
+
+  it("Flow Tab：搜索 category_label 命中展开", () => {
+    render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByText("Flow"));
+    // 搜索 category_label 中文名
+    fireEvent.change(screen.getByPlaceholderText("搜索 flow…"), { target: { value: "生态询价" } });
+    expect(screen.getAllByTestId("flow-item")).toHaveLength(1);
+    expect(screen.getByText("add-user")).toBeInTheDocument();
   });
 });
