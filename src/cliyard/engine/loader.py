@@ -25,6 +25,7 @@ from typing import Any
 
 import yaml
 
+from cliyard.engine.case import CaseSpec
 from cliyard.engine.flow import (
     FlowSpec,
     FlowStep,
@@ -209,6 +210,81 @@ def load_flows(spec_dir: str | Path) -> list[FlowSpec]:
         ))
 
     return flows
+
+
+def load_cases(spec_dir: str | Path) -> list[CaseSpec]:
+    """Load case definitions from a spec directory.
+
+    Looks for ``cases/_cases.yaml`` first, falling back to ``_cases.yaml``
+    at the root (mirroring :func:`load_flows`).  Malformed entries emit a
+    warning and are skipped — loading never raises for bad entries.
+    """
+    from cliyard.engine.labels import resolve_labels
+
+    spec_dir = Path(spec_dir).resolve()
+
+    # Look in cases/ subdirectory first, then root (mirror load_flows)
+    cases_dir = spec_dir / "cases"
+    if cases_dir.is_dir():
+        cases_path = cases_dir / "_cases.yaml"
+    else:
+        cases_path = spec_dir / "_cases.yaml"
+
+    if not cases_path.exists():
+        return []
+
+    raw = _load_yaml(cases_path)
+    raw_cases = raw.get("cases") or {}
+
+    cases: list[CaseSpec] = []
+    for case_name, case_dict in raw_cases.items():
+        if not isinstance(case_dict, dict):
+            warnings.warn(
+                f"{cases_path}: case {case_name!r} must be a mapping; skipping",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
+
+        name = case_dict.get("name") or case_name
+        if not name:
+            warnings.warn(
+                f"{cases_path}: case entry {case_name!r} has no name; skipping",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
+
+        kind = case_dict.get("kind") or "command"
+        if kind not in ("command", "flow"):
+            warnings.warn(
+                f"{cases_path}: case {name!r} has unknown kind {kind!r}; "
+                "coercing to 'command'",
+                UserWarning,
+                stacklevel=2,
+            )
+            kind = "command"
+
+        params = case_dict.get("params", {})
+        if not isinstance(params, dict):
+            warnings.warn(
+                f"{cases_path}: case {name!r} 'params' must be a mapping; ignoring",
+                UserWarning,
+                stacklevel=2,
+            )
+            params = {}
+
+        cases.append(CaseSpec(
+            name=name,
+            description=case_dict.get("description", ""),
+            kind=kind,
+            target=case_dict.get("target", ""),
+            labels=resolve_labels(case_dict),
+            params=params,
+            asserts=case_dict.get("asserts", []),
+        ))
+
+    return cases
 
 
 def _resolve_steps(
