@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 from jinja2 import ChainableUndefined
 from jinja2.sandbox import SandboxedEnvironment
 
+from cliyard.engine.assertions import evaluate_assertion
 from cliyard.engine.errors import CliyError
 from cliyard.engine.template import Template
 from cliyard.plugin import PluginRegistry
@@ -1345,7 +1346,7 @@ def run_flow(
     verbose: bool = False,
     step_cb: Callable[[str, dict], None] | None = None,
     console: Any = None,
-) -> None:
+) -> dict[str, Any]:
     """Execute a flow definition sequentially.
 
     Creates a shared :class:`~cliyard.client.http.HttpClient`, runs the
@@ -1353,6 +1354,7 @@ def run_flow(
 
     * Resolves step params via ``{{ flow.* }}`` / ``{{ step.* }}``
     * Delegates ``use:`` steps to :func:`execute_use_step`
+    * Enforces ``assert_:`` expressions after each successful step
     * Stores results in ``step_state[step.id]``
     * Prints progress and error messages via ``rich.console.Console``
 
@@ -1369,6 +1371,16 @@ def run_flow(
             (``"flow_end"``).  Emitted on every termination path, including
             early aborts and failures.  Exceptions raised by the callback are
             swallowed and never affect flow execution.  Default ``None``.
+
+    Returns:
+        Execution result dict::
+
+            {"outcome": "completed|returned|skipped|failed",
+             "step_state": {step.id: result},
+             "steps": [{"id", "label", "status"}, ...]}
+
+        ``outcome`` mirrors the ``flow_end`` event; a failing ``assert_``
+        yields ``"failed"`` without evaluating that step's ``on_result``.
 
     Raises:
         CliyError: If any step fails (flow is aborted).
@@ -1430,14 +1442,14 @@ def run_flow(
     _trigger_flow_hooks("on_start", context)
 
     # Execute steps sequentially
+    step_results: list[dict] = []
     if not flow_spec.steps:
         console.print("[yellow]Flow completed (no steps)[/yellow]")
         _emit_step(step_cb, "flow_end", {"outcome": "completed", "step_count": 0})
-        return
+        return {"outcome": "completed", "step_state": dict(context.step_state), "steps": step_results}
 
     _emit_step(step_cb, "flow_start", {"step_count": len(flow_spec.steps)})
 
-    step_results: list[dict] = []
     for step_index, step in enumerate(flow_spec.steps, 1):
         label = step.description or step.id
         _start = time.perf_counter()
@@ -1459,6 +1471,20 @@ def run_flow(
 
             # Store result in step_state for subsequent steps
             context.step_state[step.id] = result
+
+            # Raised here so the except-CliyError path below records the
+            # failure; placing it later would double-count the ok record.
+            if step.assert_:
+                assertion_failure = evaluate_assertion(
+                    step.assert_,
+                    {"flow": context.flow_params, "step": context.step_state},
+                )
+                if assertion_failure is not None:
+                    raise CliyError(
+                        f"assertion [{assertion_failure.assertion}] failed: "
+                        f"{assertion_failure.message}"
+                    )
+
             step_results.append({"id": step.id, "label": label, "status": "ok"})
             _elapsed = time.perf_counter() - _start
 
@@ -1501,11 +1527,11 @@ def run_flow(
                 if context._flow_aborted:
                     _show_flow_summary(console, step_results, "returned")
                     _emit_step(step_cb, "flow_end", {"outcome": "returned", "step_count": len(step_results)})
-                    return
+                    return {"outcome": "returned", "step_state": dict(context.step_state), "steps": step_results}
                 if context._flow_skipped:
                     _show_flow_summary(console, step_results, "skipped")
                     _emit_step(step_cb, "flow_end", {"outcome": "skipped", "step_count": len(step_results)})
-                    return
+                    return {"outcome": "skipped", "step_state": dict(context.step_state), "steps": step_results}
 
         except CliyError as e:
             _msg = str(e).replace("[", "[[]").replace("]", "[]]")
@@ -1533,7 +1559,7 @@ def run_flow(
                 },
             )
             _emit_step(step_cb, "flow_end", {"outcome": "failed", "step_count": len(step_results)})
-            return
+            return {"outcome": "failed", "step_state": dict(context.step_state), "steps": step_results}
         except Exception as e:
             _msg = str(e).replace("[", "[[]").replace("]", "[]]")
             if verbose or getattr(step, "show_response", False):
@@ -1560,11 +1586,12 @@ def run_flow(
                 },
             )
             _emit_step(step_cb, "flow_end", {"outcome": "failed", "step_count": len(step_results)})
-            return
+            return {"outcome": "failed", "step_state": dict(context.step_state), "steps": step_results}
 
     _show_flow_summary(console, step_results, "completed")
     _trigger_flow_hooks("on_end", context)
     _emit_step(step_cb, "flow_end", {"outcome": "completed", "step_count": len(step_results)})
+    return {"outcome": "completed", "step_state": dict(context.step_state), "steps": step_results}
 
 
 def _show_flow_summary(
