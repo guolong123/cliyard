@@ -1,6 +1,6 @@
 [project]
 name = "cliyard"
-version = "0.12.2"
+version = "0.13.0"
 description = "YAML-driven CLI framework — turn any REST API into CLI commands"
 authors = [
     {name = "keta", email = "dev@ketaops.cc"},
