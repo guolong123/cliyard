@@ -378,7 +378,7 @@ def _emit_format_event(
     format_payload: dict[str, Any] = {
         "output_preview": _json_preview(redact_sensitive(parsed)),
     }
-    table_payload = _build_table_payload(parsed)
+    table_payload = _build_table_payload(parsed, output_spec.get("fields", []))
     if table_payload is not None:
         format_payload["table"] = table_payload
     _emit_step(step_cb, "format", format_payload)

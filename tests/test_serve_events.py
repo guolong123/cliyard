@@ -89,7 +89,7 @@ def test_execute_pipeline_event_sequence():
     format_event = events[4][1]
     assert "output_preview" in format_event
 
-    assert result == {"items": [], "total": 0, "fields": []}
+    assert result == {"items": [], "total": 0}
 
 
 def test_sensitive_values_redacted_in_events():
@@ -349,7 +349,7 @@ def test_event_cb_raising_does_not_break_pipeline():
         event_cb=boom,
     )
 
-    assert result == {"items": [], "total": 0, "fields": []}
+    assert result == {"items": [], "total": 0}
 
 
 def test_redact_sensitive_unit():

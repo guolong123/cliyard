@@ -24,12 +24,15 @@ def parse_response(response: requests.Response | dict, output_spec: dict) -> dic
               e.g. ``"$.data.items"``.
             - total_path (str, optional): JSONPath expression for the total count,
               e.g. ``"$.data.total"``.
-            - fields (list[dict], optional): Field definitions (name, alias).
-              Stored in result but not used during parsing.
 
     Returns:
         ``{"items": [...], "total": N}``.
         ``total`` defaults to ``len(items)`` when *total_path* is absent.
+
+        Note: display metadata (``output.fields`` column definitions) is
+        intentionally **not** included — it belongs to the rendering layer,
+        not to the data payload (it would otherwise leak into ``--format
+        json`` / ``--format yaml`` output).
 
     Raises:
         ResponseParseError: If JSONPath extraction fails (bad path, non-JSON body,
@@ -68,10 +71,7 @@ def parse_response(response: requests.Response | dict, output_spec: dict) -> dic
     else:
         total = len(items)
 
-    # --- 4. Collect field metadata (pass-through) -----------------------------
-    fields = output_spec.get("fields", [])
-
-    return {"items": items, "total": total, "fields": fields}
+    return {"items": items, "total": total}
 
 
 # ---------------------------------------------------------------------------

@@ -299,7 +299,7 @@ def execute_pipeline(
             already set).  If omitted, a fresh client is created and the auth
             chain from *service_ctx* is executed.
         raw_response: If ``True``, return the raw JSON response dict instead
-            of the parsed ``{items, total, fields}`` format.  Used by the
+            of the parsed ``{items, total}`` format.  Used by the
             flow orchestrator for JSONPath extraction.
         event_cb: Optional ``(event_name, payload)`` callback invoked at key
             pipeline stages — ``"validate"``, ``"auth"``, ``"request"``,
@@ -308,7 +308,7 @@ def execute_pipeline(
             swallowed and never affect pipeline execution.  Default ``None``.
 
     Returns:
-        Parsed response data dict (``{items, total, fields}``) by default,
+        Parsed response data dict (``{items, total}``) by default,
         or the raw JSON response dict when *raw_response* is ``True``.
 
     Raises:
@@ -506,7 +506,7 @@ def execute_pipeline(
         format_payload: dict[str, Any] = {
             "output_preview": _json_preview(redact_sensitive(data))
         }
-        table_payload = _build_table_payload(data)
+        table_payload = _build_table_payload(data, output_spec.get("fields", []))
         if table_payload is not None:
             format_payload["table"] = table_payload
         _emit_event(event_cb, "format", format_payload)
@@ -530,21 +530,28 @@ def _emit_event(
         pass
 
 
-def _build_table_payload(data: dict[str, Any]) -> dict[str, Any] | None:
+def _build_table_payload(data: dict[str, Any], fields: list[dict] | None = None) -> dict[str, Any] | None:
     """Build the structured ``table`` field for the ``format`` event payload.
 
-    Only emitted when the pipeline ran the ``items_path`` branch and the
-    parsed data carries both a non-empty item list and field definitions.
-    Columns expose the YAML ``alias`` (falling back to ``name``); cell values
-    are redacted (sensitive keys → ``***``) before extraction and rendered
-    through :func:`cliyard.output.formatter._format_field_value` so that
+    Only emitted when the pipeline ran the ``items_path`` branch and field
+    definitions are available.  Columns expose the YAML ``alias`` (falling
+    back to ``name``); cell values are redacted (sensitive keys → ``***``)
+    before extraction and rendered through
+    :func:`cliyard.output.formatter._format_field_value` so that
     ``format: datetime`` conversion applies in the table view too.
+
+    Args:
+        data: Parsed response data (``{"items": [...], "total": N}``).
+        fields: Field definitions from the YAML ``output.fields`` section.
+            May also be provided inside *data* under ``"fields"`` for
+            backward compatibility with callers that build the dict manually.
 
     Returns ``None`` when there is nothing table-shaped to show (caller keeps
     the JSON-only payload, preserving backward compatibility).
     """
     items = data.get("items")
-    fields = data.get("fields") or []
+    if fields is None:
+        fields = data.get("fields") or []
     if not isinstance(items, list) or not fields:
         return None
 

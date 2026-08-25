@@ -239,3 +239,25 @@ class TestFormatEndToEnd:
         result = self._invoke(http_mock, ["list", "--format=yaml"])
         assert result.exit_code == 0
         assert "name: a" in result.output
+
+    def test_list_json_output_has_no_fields(self, http_mock):
+        result = self._invoke(http_mock, ["list", "--format=json"])
+        assert result.exit_code == 0
+        assert '"fields"' not in result.output
+
+
+# ---------------------------------------------------------------------------
+# parse_response must not leak display metadata into data payload
+# ---------------------------------------------------------------------------
+
+
+class TestParseResponseExcludesFields:
+    def test_parse_response_omits_fields_key(self):
+        from cliyard.output.handler import parse_response
+
+        resp = MagicMock()
+        resp.json.return_value = {"repos": [{"name": "a", "bytes": "1b"}], "total": 1}
+        parsed = parse_response(resp, {"items_path": "$.repos", "total_path": "$.total",
+                                       "fields": [{"name": "name", "alias": "仓库名称"}]})
+        assert parsed == {"items": [{"name": "a", "bytes": "1b"}], "total": 1}
+        assert "fields" not in parsed
