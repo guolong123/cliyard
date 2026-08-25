@@ -28,6 +28,7 @@ from cliyard.engine.orchestrator import (
     _execute_for_each,
 )
 from cliyard.engine.template import Template
+from cliyard.plugin import PluginRegistry, register_step_type
 
 from tests.test_flow import MockConsole, MockHttpClient
 
@@ -315,3 +316,115 @@ class TestForEachEcho:
         assert "Processing a" in output
         assert "Processing b" in output
         assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# 5. on_result sub-steps with type:plugin: are executed (Issue #57)
+# ---------------------------------------------------------------------------
+
+
+class TestOnResultPluginSubSteps:
+    """Plugin sub-steps inside on_result then/else blocks must be executed."""
+
+    def test_plugin_sub_step_in_then_block(self):
+        """A type: plugin:xxx sub-step in a then block is executed."""
+        call_log: list[dict] = []
+
+        @register_step_type("test_plugin")
+        def test_plugin(params: dict, context: object) -> dict:
+            call_log.append(params)
+            return {"plugin_called": True}
+
+        spec = _make_service_spec([])
+        ctx = _make_flow_context(spec)
+        ctx.step_state = {"check": {"count": 5}}
+
+        on_result = [
+            {
+                "if": "{{ step.check.count > 0 }}",
+                "then": [
+                    {
+                        "id": "plugin_step",
+                        "type": "plugin:test_plugin",
+                        "params": {"input": "hello"},
+                    }
+                ],
+            }
+        ]
+
+        handle_on_result(on_result, ctx, "check")
+
+        assert len(call_log) == 1, f"Expected 1 plugin call, got {len(call_log)}"
+        assert call_log[0] == {"input": "hello"}
+        assert "plugin_step" in ctx.step_state
+        assert ctx.step_state["plugin_step"] == {"plugin_called": True}
+
+    def test_plugin_sub_step_in_else_block(self):
+        """A type: plugin:xxx sub-step in an else block is executed."""
+        call_log: list[dict] = []
+
+        @register_step_type("test_plugin_else")
+        def test_plugin_else(params: dict, context: object) -> dict:
+            call_log.append(params)
+            return {"else_plugin_called": True}
+
+        spec = _make_service_spec([])
+        ctx = _make_flow_context(spec)
+        ctx.step_state = {"check": {"count": 0}}
+
+        on_result = [
+            {
+                "if": "{{ step.check.count > 0 }}",
+                "then": [],
+                "else": [
+                    {
+                        "id": "else_plugin_step",
+                        "type": "plugin:test_plugin_else",
+                        "params": {"input": "fallback"},
+                    }
+                ],
+            }
+        ]
+
+        handle_on_result(on_result, ctx, "check")
+
+        assert len(call_log) == 1, f"Expected 1 plugin call, got {len(call_log)}"
+        assert call_log[0] == {"input": "fallback"}
+        assert "else_plugin_step" in ctx.step_state
+        assert ctx.step_state["else_plugin_step"] == {"else_plugin_called": True}
+
+    def test_plugin_sub_step_with_show_response(self):
+        """Plugin sub-step with show_response: true prints details."""
+        call_log: list[dict] = []
+
+        @register_step_type("test_plugin_show")
+        def test_plugin_show(params: dict, context: object) -> dict:
+            call_log.append(params)
+            return {"show_called": True}
+
+        spec = _make_service_spec([])
+        ctx = _make_flow_context(spec)
+        ctx.step_state = {"check": {"count": 1}}
+
+        on_result = [
+            {
+                "if": "{{ step.check.count > 0 }}",
+                "then": [
+                    {
+                        "id": "plugin_show_step",
+                        "type": "plugin:test_plugin_show",
+                        "params": {"input": "show_me"},
+                        "show_response": True,
+                    }
+                ],
+            }
+        ]
+
+        handle_on_result(on_result, ctx, "check")
+
+        assert len(call_log) == 1
+        assert call_log[0] == {"input": "show_me"}
+        # show_response should trigger verbose output even without --verbose
+        output = "\n".join(ctx.console.output)
+        assert "params:" in output
+        assert "response:" in output
