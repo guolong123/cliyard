@@ -192,3 +192,96 @@ def test_api_module_registered(client):
     # _IncludedRouter wraps sub-routers; verify via an actual request instead.
     resp = client.get("/api/favorites")
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# 非 dict JSON 容错（L4）
+# ---------------------------------------------------------------------------
+
+
+def test_load_non_dict_json_returns_empty(client, fav_file):
+    """L4: 合法 JSON 但为数组/标量时返回空列表，不崩溃。"""
+    fav_file.write_text("[1, 2, 3]", encoding="utf-8")
+    resp = client.get("/api/favorites")
+    assert resp.status_code == 200
+    assert resp.json() == {"favorites": []}
+
+    fav_file.write_text('"just a string"', encoding="utf-8")
+    resp = client.get("/api/favorites")
+    assert resp.status_code == 200
+    assert resp.json() == {"favorites": []}
+
+
+# ---------------------------------------------------------------------------
+# 增量 toggle 端点（H3）
+# ---------------------------------------------------------------------------
+
+
+def test_toggle_add_item(client, fav_file):
+    """POST /api/favorites/toggle 添加一条新收藏。"""
+    resp = client.post(
+        "/api/favorites/toggle",
+        json={
+            "target": "company.list",
+            "item": {"name": "cl", "target": "company.list", "group": "g"},
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["action"] == "added"
+    assert body["count"] == 1
+
+    get_resp = client.get("/api/favorites")
+    assert len(get_resp.json()["favorites"]) == 1
+
+
+def test_toggle_remove_item(client, fav_file):
+    """POST /api/favorites/toggle 移除已存在的收藏。"""
+    # 先添加
+    client.post(
+        "/api/favorites",
+        json={"favorites": [{"name": "cl", "target": "company.list", "group": "g"}]},
+    )
+    # 再 toggle 移除
+    resp = client.post(
+        "/api/favorites/toggle",
+        json={"target": "company.list"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "removed"
+    assert resp.json()["count"] == 0
+
+    get_resp = client.get("/api/favorites")
+    assert len(get_resp.json()["favorites"]) == 0
+
+
+def test_toggle_add_then_remove_idempotent(client, fav_file):
+    """Toggle 两次回到初始状态。"""
+    client.post(
+        "/api/favorites/toggle",
+        json={
+            "target": "a.b",
+            "item": {"name": "ab", "target": "a.b", "group": "g"},
+        },
+    )
+    assert len(client.get("/api/favorites").json()["favorites"]) == 1
+    client.post(
+        "/api/favorites/toggle",
+        json={"target": "a.b"},
+    )
+    assert len(client.get("/api/favorites").json()["favorites"]) == 0
+
+
+def test_toggle_missing_target_400(client, fav_file):
+    """target 为空时返回 400。"""
+    resp = client.post("/api/favorites/toggle", json={"target": ""})
+    assert resp.status_code == 400
+
+
+def test_toggle_remove_nonexistent_without_item_400(client, fav_file):
+    """移除不存在的 target 且未提供 item 时返回 400。"""
+    resp = client.post(
+        "/api/favorites/toggle",
+        json={"target": "nonexistent.target"},
+    )
+    assert resp.status_code == 400

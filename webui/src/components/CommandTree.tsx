@@ -11,7 +11,7 @@ import {
   type StatusTheme,
 } from "../styles/tokens";
 import type { Flow, GroupResource, SpecData, TreeItem, Favorite } from "../api/client";
-import { fetchFavorites, saveFavorites } from "../api/client";
+import { fetchFavorites, toggleFavorite } from "../api/client";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -311,22 +311,32 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
   // 搜索时自动展开所有匹配到的 flow 组；无搜索词时尊重用户折叠状态
   const searchActive = q !== "";
 
-  /** 切换收藏：构造/移除 Favorite 对象并同步后端 */
+  /** 切换收藏：使用增量 /toggle 端点，避免全量替换竞态 */
   const handleToggleFavorite = async (c: TreeItem, targetPrefix: string, groupName: string) => {
     const target = `${targetPrefix}.${c.name}`;
     const existing = favorites.find((f) => f.target === target);
+    // 乐观更新
     let updated: Favorite[];
     if (existing) {
       updated = favorites.filter((f) => f.target !== target);
     } else {
       updated = [
         ...favorites,
-        { name: c.name, target, group: groupName, description: c.desc || undefined },
+        { name: c.name, target, group: groupName, description: c.desc || "" },
       ];
     }
     setFavorites(updated);
     try {
-      await saveFavorites(updated);
+      if (existing) {
+        await toggleFavorite(target);
+      } else {
+        await toggleFavorite(target, {
+          name: c.name,
+          target,
+          group: groupName,
+          description: c.desc || "",
+        });
+      }
     } catch {
       // 回退到服务端状态
       fetchFavorites().then((d) => setFavorites(d.favorites)).catch(() => {});

@@ -294,7 +294,8 @@ export interface Favorite {
   name: string;
   target: string;
   group: string;
-  description?: string;
+  /** 后端 Pydantic 归一化为空字符串，前端保留为空字符串以对齐 */
+  description: string;
 }
 
 /** GET /api/favorites：读取收藏夹 */
@@ -309,5 +310,16 @@ export function saveFavorites(
   return request<{ status: string; count: number }>(
     "/api/favorites",
     jsonInit("POST", { favorites }),
+  );
+}
+
+/** POST /api/favorites/toggle：增量添加/移除一条收藏（H3 缓解） */
+export function toggleFavorite(
+  target: string,
+  item?: Favorite,
+): Promise<{ status: string; action: string; count: number }> {
+  return request<{ status: string; action: string; count: number }>(
+    "/api/favorites/toggle",
+    jsonInit("POST", item ? { target, item } : { target }),
   );
 }
