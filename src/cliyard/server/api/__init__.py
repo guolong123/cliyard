@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from cliyard.server.api import auth, execute, history, spec
+from cliyard.server.api import auth, execute, favorites, history, spec
 
 router = APIRouter(prefix="/api")
 
@@ -21,3 +21,4 @@ router.include_router(spec.router)
 router.include_router(execute.router)
 router.include_router(history.router)
 router.include_router(auth.router)
+router.include_router(favorites.router)

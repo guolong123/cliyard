@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   brand,
@@ -10,11 +10,12 @@ import {
   statusColors,
   type StatusTheme,
 } from "../styles/tokens";
-import type { Flow, GroupResource, SpecData, TreeItem } from "../api/client";
+import type { Flow, GroupResource, SpecData, TreeItem, Favorite } from "../api/client";
+import { fetchFavorites, saveFavorites } from "../api/client";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-export type SideTab = "commands" | "flows";
+export type SideTab = "commands" | "flows" | "favorites";
 
 /** 选中项：命令 = {kind:"command", target:"resource.method"}；flow = {kind:"flow", target: flow.command} */
 export interface Selection {
@@ -75,6 +76,19 @@ const treeCss = `
   .cliyard-flow-item[data-active="true"] { background-color: ${brand[50]}; }
   .cliyard-flow-item[data-active="true"] .cliyard-flow-name { color: ${brand[600]}; font-weight: 500; }
   .cliyard-flow-item[data-active="true"] .cliyard-flow-command { color: ${brand[500]}; }
+
+  .cliyard-favorite-item {
+    position: relative; display: flex; flex-direction: column; gap: 2px;
+    width: 100%; padding: ${space.sm - 2}px ${space.md}px ${space.sm - 2}px ${space.md + 4}px;
+    border: none; border-radius: 0 ${radius.md}px ${radius.md}px 0;
+    cursor: pointer; text-align: left;
+    background-color: transparent; color: ${neutral[600]};
+    font-size: ${fontSize.sm}px; font-family: ${fontFamily.mono};
+    transition: background-color .15s ease, border-color .15s ease;
+  }
+  .cliyard-favorite-item:hover { background-color: ${neutral[100]}; }
+  .cliyard-favorite-item[data-active="true"] { background-color: ${brand[50]}; color: ${brand[600]}; font-weight: 500; }
+  .cliyard-favorite-item[data-active="true"]:hover { background-color: ${brand[50]}; }
 `;
 
 /** 选中指示条：左侧 3px 品牌蓝竖条（命令项/flow 项共用） */
@@ -102,7 +116,6 @@ function LabelPill({ label }: { label: string }) {
   return (
     <span
       style={{
-        marginLeft: "auto",
         borderRadius: radius.pill,
         padding: "0 6px",
         backgroundColor: t.bg,
@@ -157,6 +170,35 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
   const [expandedFlowGroups, setExpandedFlowGroups] = useState<Set<string>>(
     () => new Set(),
   );
+
+  // 收藏夹
+  const [favorites, setFavorites] = useState<Favorite[]>([]);
+  useEffect(() => {
+    fetchFavorites().then((d) => setFavorites(d.favorites)).catch(() => {});
+  }, []);
+
+  // 收藏夹：按分组 + 颜色分配
+  const favoriteGroups = useMemo(() => {
+    const groupColors = [
+      "#3B82F6", "#8B5CF6", "#EC4899", "#F59E0B", "#10B981",
+      "#06B6D4", "#F97316", "#6366F1", "#14B8A6", "#84CC16",
+      "#E11D48", "#7C3AED", "#0891B2", "#65A30D", "#D946EF",
+      "#0EA5E9", "#F43F5E", "#8B5CF6", "#34D399", "#FBBF24",
+    ];
+    const groups: Record<string, { items: Favorite[]; color: string }> = {};
+    let colorIdx = 0;
+    for (const f of favorites) {
+      const g = f.group || "其他";
+      if (!groups[g]) {
+        groups[g] = { items: [], color: groupColors[colorIdx % groupColors.length] };
+        colorIdx++;
+      }
+      groups[g].items.push(f);
+    }
+    return Object.entries(groups)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([group, { items, color }]) => ({ group, items, color }));
+  }, [favorites]);
 
   const q = search.trim().toLowerCase();
 
@@ -268,6 +310,28 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
 
   // 搜索时自动展开所有匹配到的 flow 组；无搜索词时尊重用户折叠状态
   const searchActive = q !== "";
+
+  /** 切换收藏：构造/移除 Favorite 对象并同步后端 */
+  const handleToggleFavorite = async (c: TreeItem, targetPrefix: string, groupName: string) => {
+    const target = `${targetPrefix}.${c.name}`;
+    const existing = favorites.find((f) => f.target === target);
+    let updated: Favorite[];
+    if (existing) {
+      updated = favorites.filter((f) => f.target !== target);
+    } else {
+      updated = [
+        ...favorites,
+        { name: c.name, target, group: groupName, description: c.desc || undefined },
+      ];
+    }
+    setFavorites(updated);
+    try {
+      await saveFavorites(updated);
+    } catch {
+      // 回退到服务端状态
+      fetchFavorites().then((d) => setFavorites(d.favorites)).catch(() => {});
+    }
+  };
   const effectiveExpandedFlowGroups = useMemo(() => {
     if (!searchActive) return expandedFlowGroups;
     const all = new Set<string>();
@@ -276,53 +340,87 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
   }, [expandedFlowGroups, groupedFlows, searchActive]);
 
   /** 命令项按钮（target = 资源名.方法名，与 executor 的 resource.method 语义一致） */
-  const renderCommandItem = (c: TreeItem, targetPrefix: string) => {
+  const renderCommandItem = (c: TreeItem, targetPrefix: string, groupName: string) => {
     const target = `${targetPrefix}.${c.name}`;
     const on = selected?.kind === "command" && selected.target === target;
+    const isFav = favorites.some((f) => f.target === target);
     return (
-      <button
-        key={target}
-        type="button"
-        data-testid="tree-item"
-        data-active={on ? "true" : "false"}
-        onClick={() => onSelect({ kind: "command", target })}
-        className="cliyard-tree-item"
-      >
-        {on && <ActiveBar top={14} />}
-        {/* 主行：mono 名称 + labels pill */}
-        <span style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
-          <span
-            style={{
-              fontFamily: fontFamily.mono,
-              fontSize: fontSize.sm,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {c.name}
+      <div key={target} style={{ display: "flex", alignItems: "stretch", minWidth: 0 }}>
+        <button
+          type="button"
+          data-testid="tree-item"
+          data-active={on ? "true" : "false"}
+          onClick={() => onSelect({ kind: "command", target })}
+          className="cliyard-tree-item"
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          {on && <ActiveBar top={14} />}
+          {/* 主行：mono 名称 + labels pill */}
+          <span style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
+            <span
+              style={{
+                fontFamily: fontFamily.mono,
+                fontSize: fontSize.sm,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {c.name}
+            </span>
+            {c.labels.map((lb) => (
+              <LabelPill key={lb} label={lb} />
+            ))}
           </span>
-          {c.labels.map((lb) => (
-            <LabelPill key={lb} label={lb} />
-          ))}
-        </span>
-        {/* 次行：描述（两行内省略） */}
-        {c.desc && (
-          <span
-            style={{
-              fontSize: fontSize.xs,
-              color: neutral[500],
-              lineHeight: 1.5,
-              overflow: "hidden",
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-            }}
-          >
-            {c.desc}
-          </span>
-        )}
-      </button>
+          {/* 次行：描述（两行内省略） */}
+          {c.desc && (
+            <span
+              style={{
+                fontSize: fontSize.xs,
+                color: neutral[500],
+                lineHeight: 1.5,
+                overflow: "hidden",
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+              }}
+            >
+              {c.desc}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          aria-label={isFav ? "取消收藏" : "收藏"}
+          data-testid="star-btn"
+          data-active={isFav ? "true" : "false"}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleToggleFavorite(c, targetPrefix, groupName);
+          }}
+          style={{
+            flexShrink: 0,
+            width: 32,
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            fontSize: 14,
+            lineHeight: 1,
+            color: isFav ? brand[500] : neutral[300],
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            transition: "color .15s ease",
+            borderTopRightRadius: radius.md,
+            borderBottomRightRadius: radius.md,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = neutral[100]; }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+        >
+          {isFav ? "★" : "☆"}
+        </button>
+      </div>
     );
   };
 
@@ -369,7 +467,8 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
         {(
           [
             { id: "commands", label: "命令" },
-            { id: "flows", label: "Flow" },
+            { id: "favorites", label: "⭐ 常用命令" },
+            { id: "flows", label: "流程" },
           ] as const
         ).map((t) => (
           <button
@@ -397,8 +496,9 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
         ))}
       </div>
 
-      {/* 搜索（过滤当前 tab 内容） */}
-      <div
+      {sideTab !== "favorites" && (
+        /* 搜索（过滤当前 tab 内容） */
+        <div
         style={{
           display: "flex",
           alignItems: "center",
@@ -431,7 +531,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
           data-testid="tree-search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder={sideTab === "commands" ? "搜索命令…" : "搜索 flow…"}
+          placeholder={sideTab === "commands" ? "搜索命令…" : sideTab === "flows" ? "搜索流程…" : "搜索收藏…"}
           style={{
             flex: 1,
             minWidth: 0,
@@ -444,8 +544,113 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
           }}
         />
       </div>
+      )}
 
-      {sideTab === "commands" ? (
+      {sideTab === "favorites" ? (
+        favorites.length === 0 ? (
+          <EmptyState text="暂无收藏，在命令上点击 ☆ 添加" />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
+            {favoriteGroups.map(({ group, items, color }) => (
+                <div key={group}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: space.sm,
+                      marginBottom: space.sm,
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        backgroundColor: color,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span
+                      style={{
+                        fontSize: fontSize.sm,
+                        fontWeight: 600,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.06,
+                        color: neutral[700],
+                      }}
+                    >
+                      {group}
+                    </span>
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                      {items.length}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    {items.map((f) => {
+                      const on = selected?.kind === "command" && selected.target === f.target;
+                      return (
+                        <button
+                          key={f.target}
+                          type="button"
+                          className="cliyard-favorite-item"
+                          data-active={on ? "true" : "false"}
+                          onClick={() => onSelect({ kind: "command", target: f.target })}
+                          style={{
+                            borderLeft: `3px solid ${color}40`,
+                          }}
+                        >
+                          {on && <ActiveBar top={14} />}
+                          <span style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
+                            <span
+                              style={{
+                                fontFamily: fontFamily.mono,
+                                fontSize: fontSize.sm,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                ...(on ? { color: brand[600], fontWeight: 500 } : {}),
+                              }}
+                            >
+                              {f.name}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: fontSize.xs,
+                                color: neutral[400],
+                                fontFamily: fontFamily.mono,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {f.target}
+                            </span>
+                          </span>
+                          {f.description && (
+                            <span
+                              style={{
+                                fontSize: fontSize.xs,
+                                color: neutral[500],
+                                lineHeight: 1.5,
+                                overflow: "hidden",
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical",
+                              }}
+                            >
+                              {f.description}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+          </div>
+        )
+      ) : sideTab === "commands" ? (
         filteredGroups.length === 0 ? (
           <EmptyState text="无命令" />
         ) : (
@@ -527,14 +732,14 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                           <div key={`${g.group}-${r.name}-${ri}`}>
                             {renderResourceHeader(r)}
                             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                              {r.commands.map((c) => renderCommandItem(c, r.name))}
+                              {r.commands.map((c) => renderCommandItem(c, r.name, g.group))}
                             </div>
                           </div>
                         ))}
                       </div>
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        {g.commands.map((c) => renderCommandItem(c, g.group))}
+                        {g.commands.map((c) => renderCommandItem(c, g.group, g.group))}
                       </div>
                     ))}
                 </div>

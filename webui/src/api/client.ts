@@ -287,3 +287,27 @@ export function deleteAuth(profile: string): Promise<{ deleted: string; auto_swi
 export function fetchEnvironments(): Promise<{ environments: EnvPreset[] }> {
   return request<{ environments: EnvPreset[] }>("/api/auth/environments");
 }
+
+/* ---------------------------------- 收藏夹 ---------------------------------- */
+
+export interface Favorite {
+  name: string;
+  target: string;
+  group: string;
+  description?: string;
+}
+
+/** GET /api/favorites：读取收藏夹 */
+export function fetchFavorites(): Promise<{ favorites: Favorite[] }> {
+  return request<{ favorites: Favorite[] }>("/api/favorites");
+}
+
+/** POST /api/favorites：保存收藏夹（全量替换） */
+export function saveFavorites(
+  favorites: Favorite[],
+): Promise<{ status: string; count: number }> {
+  return request<{ status: string; count: number }>(
+    "/api/favorites",
+    jsonInit("POST", { favorites }),
+  );
+}

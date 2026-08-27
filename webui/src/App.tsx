@@ -113,12 +113,15 @@ export default function App() {
         ...baseFont,
       }}
     >
-      <TopBar service={spec?.service} onAuthClick={() => setAuthOpen(true)} />
+      <TopBar
+          service={spec?.service}
+          onAuthClick={() => setAuthOpen(true)}
+        />
       <AuthPanel open={authOpen} onClose={() => setAuthOpen(false)} />
 
       {/* 内容区：三栏 */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", gap: space.lg, padding: space.xl }}>
-        {/* ① 命令树 */}
+        {/* ① 命令树 / 收藏夹 */}
         <aside
           data-testid="command-tree"
           style={{ width: 320, flexShrink: 0, ...cardBase, padding: space.lg, overflowY: "auto" }}
