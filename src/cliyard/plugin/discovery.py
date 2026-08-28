@@ -1,9 +1,10 @@
 """Plugin discovery: entry points + directory scanning.
 
-Discovers plugins from three sources:
+Discovers plugins from four sources:
 1. Python entry points (``cliyard.auth``, ``cliyard.types``, ``cliyard.hooks``, ``cliyard.steps``)
 2. Spec-local plugin directory: ``{spec_dir}/plugins/*.py``
-3. Global plugin directory: ``~/.cliyard/plugins/*.py``
+3. CWD hidden dir: ``./.cliyard/plugins/*.py`` (project-local, e.g. repo/.cliyard/plugins)
+4. Global plugin directory: ``~/.cliyard/plugins/*.py``
 """
 
 from __future__ import annotations
@@ -24,7 +25,8 @@ def discover_plugins(spec_dir: str | None = None) -> None:
 
     1. Entry points: ``cliyard.auth``, ``cliyard.types``, ``cliyard.hooks``, ``cliyard.steps``
     2. Spec directory: ``{spec_dir}/plugins/*.py``
-    3. Global dir: ``~/.cliyard/plugins/*.py``
+    3. CWD hidden dir: ``./.cliyard/plugins/*.py`` (project-local)
+    4. Global dir: ``~/.cliyard/plugins/*.py``
 
     Entry points are scanned once only. Directories are scanned at most once
     each, so subsequent calls with new directories will pick up new files.
@@ -41,6 +43,7 @@ def discover_plugins(spec_dir: str | None = None) -> None:
     if spec_dir:
         _scan_if_new(Path(spec_dir) / "plugins")
         _scan_if_new(Path(spec_dir).parent / "plugins")
+    _scan_if_new(Path.cwd() / ".cliyard" / "plugins")
     _scan_if_new(Path.home() / ".cliyard" / "plugins")
 
 
