@@ -160,13 +160,23 @@ function renderTree(selected: Selection | null = null, onSelect = vi.fn()) {
   return render(<CommandTree spec={spec} selected={selected} onSelect={onSelect} />);
 }
 
+/** 展开首个命令分组并返回其 header（命令分组默认折叠，测试需先展开） */
+function expandFirstGroup() {
+  const headers = screen.getAllByTestId("group-header");
+  fireEvent.click(headers[0]);
+  return headers[0];
+}
+
 describe("CommandTree", () => {
   it("渲染命令分组标题、命令项与 labels pill", () => {
     renderTree();
     // 分组标题（uppercase repos）
     expect(screen.getByText("repos")).toBeInTheDocument();
     expect(screen.getByText("仓库管理")).toBeInTheDocument();
-    // 命令项
+    // 命令分组默认折叠：命令项不可见
+    expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
+    // 展开后命令项可见
+    expandFirstGroup();
     expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
     expect(screen.getByText("list")).toBeInTheDocument();
     expect(screen.getByText("delete")).toBeInTheDocument();
@@ -180,8 +190,9 @@ describe("CommandTree", () => {
     const tabs = screen.getAllByTestId("side-tab");
     expect(tabs).toHaveLength(2);
 
-    // 初始：命令 tab 生效
+    // 初始：命令 tab 生效（需先展开分组）
     expect(screen.getByPlaceholderText("搜索命令…")).toBeInTheDocument();
+    expandFirstGroup();
     expect(screen.getByText("list")).toBeInTheDocument();
 
     // 切到 Flow：命令项消失，flow 项出现（主名显示 command 形式）
@@ -192,7 +203,7 @@ describe("CommandTree", () => {
     // flow 参数数 pill
     expect(screen.getByText("1 参数")).toBeInTheDocument();
 
-    // 切回命令：恢复
+    // 切回命令：恢复（展开状态保留）
     fireEvent.click(tabs[0]);
     expect(screen.getByText("list")).toBeInTheDocument();
     expect(screen.queryByText("add-user")).not.toBeInTheDocument();
@@ -202,7 +213,7 @@ describe("CommandTree", () => {
     renderTree();
     const input = screen.getByPlaceholderText("搜索命令…");
 
-    // 命令 tab：按名称过滤
+    // 命令 tab：搜索自动展开匹配组，按名称过滤
     fireEvent.change(input, { target: { value: "list" } });
     expect(screen.getByText("list")).toBeInTheDocument();
     expect(screen.queryByText("delete")).not.toBeInTheDocument();
@@ -223,7 +234,8 @@ describe("CommandTree", () => {
     const onSelect = vi.fn();
     renderTree(null, onSelect);
 
-    // 命令项
+    // 命令项（先展开分组）
+    expandFirstGroup();
     fireEvent.click(screen.getByText("list"));
     expect(onSelect).toHaveBeenCalledWith<[Selection]>({ kind: "command", target: "repos.list" });
 
@@ -235,6 +247,7 @@ describe("CommandTree", () => {
 
   it("选中项显示激活态（选中判定：命令 kind+target 匹配）", () => {
     renderTree({ kind: "command", target: "repos.list" });
+    expandFirstGroup();
     const [list, deleteBtn] = screen.getAllByTestId("tree-item");
     expect(list.getAttribute("data-active")).toBe("true");
     expect(deleteBtn.getAttribute("data-active")).toBe("false");
@@ -244,9 +257,10 @@ describe("CommandTree", () => {
     render(<CommandTree spec={dupGroupSpec} selected={null} onSelect={vi.fn()} />);
     const tabs = screen.getAllByTestId("side-tab");
 
-    // 命令 tab：同名分组各渲染一次，命令项全部可见
+    // 命令 tab：同名分组各渲染一次，先展开，命令项全部可见
     expect(screen.getByText("模板分组 A")).toBeInTheDocument();
     expect(screen.getByText("模板分组 B")).toBeInTheDocument();
+    screen.getAllByTestId("group-header").forEach((h) => fireEvent.click(h));
     expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
 
     for (let i = 0; i < 5; i++) {
@@ -255,7 +269,7 @@ describe("CommandTree", () => {
       expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
       expect(screen.getAllByTestId("flow-item")).toHaveLength(1);
 
-      // 切回命令：命令项数量稳定，不随切换累积
+      // 切回命令：命令项数量稳定（展开状态保留），不随切换累积
       fireEvent.click(tabs[0]);
       expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
     }
@@ -272,6 +286,8 @@ describe("CommandTree", () => {
 describe("CommandTree 扁平分组", () => {
   it("resources=[]：组标题下直接渲染命令项，无资源小节标题", () => {
     render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
+    // 先展开分组
+    expandFirstGroup();
     // 命令项直接挂组下
     expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
     // 组标题唯一：扁平分支不额外渲染资源小节标题（三级分支会出现第二个 "repos"）
@@ -281,6 +297,7 @@ describe("CommandTree 扁平分组", () => {
   it("resources=[]：选中回调 target = 组名.方法名", () => {
     const onSelect = vi.fn();
     render(<CommandTree spec={spec} selected={null} onSelect={onSelect} />);
+    expandFirstGroup();
     fireEvent.click(screen.getAllByTestId("tree-item")[0]);
     expect(onSelect).toHaveBeenCalledWith<[Selection]>({ kind: "command", target: "repos.list" });
   });
@@ -297,6 +314,10 @@ describe("CommandTree 两级分组", () => {
   it("两级分组：组标题/组 desc + 子资源名/desc + 资源下命令项", () => {
     render(<CommandTree spec={twoLevelSpec} selected={null} onSelect={vi.fn()} />);
     expect(screen.getByText("target")).toBeInTheDocument();
+    // 组 desc 在折叠时也已渲染
+    expect(screen.getByText("运维资产对象")).toBeInTheDocument();
+    // 命令分组默认折叠：先展开，组 desc + manage 资源 desc 才都可见
+    expandFirstGroup();
     expect(screen.getAllByText("运维资产对象").length).toBeGreaterThanOrEqual(2); // 组 desc + manage 资源 desc
     expect(screen.getByText("manage")).toBeInTheDocument();
     expect(screen.getByText("type")).toBeInTheDocument();
@@ -308,6 +329,7 @@ describe("CommandTree 两级分组", () => {
   it("两级分组：选中回调 target = 资源名.方法名（manage.list，非 target.list）", () => {
     const onSelect = vi.fn();
     render(<CommandTree spec={twoLevelSpec} selected={null} onSelect={onSelect} />);
+    expandFirstGroup();
     fireEvent.click(screen.getAllByTestId("tree-item")[0]);
     expect(onSelect).toHaveBeenCalledWith<[Selection]>({ kind: "command", target: "manage.list" });
   });
@@ -316,6 +338,7 @@ describe("CommandTree 两级分组", () => {
     render(
       <CommandTree spec={twoLevelSpec} selected={{ kind: "command", target: "type.list" }} onSelect={vi.fn()} />,
     );
+    expandFirstGroup();
     const [manage, type] = screen.getAllByTestId("tree-item");
     expect(manage.getAttribute("data-active")).toBe("false");
     expect(type.getAttribute("data-active")).toBe("true");
@@ -333,39 +356,38 @@ describe("CommandTree 两级分组", () => {
 });
 
 describe("CommandTree 分组折叠/展开", () => {
-  it("默认全部展开：命令项可见", () => {
+  it("默认全部折叠：命令分组头可见，命令项不可见", () => {
     render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
-    expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
-    expect(screen.getByText("list")).toBeInTheDocument();
-    expect(screen.getByText("delete")).toBeInTheDocument();
+    expect(screen.getByText("repos")).toBeInTheDocument();
+    expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
+    expect(screen.queryByText("list")).not.toBeInTheDocument();
+    expect(screen.queryByText("delete")).not.toBeInTheDocument();
   });
 
-  it("点击分组标题折叠：命令项隐藏", () => {
+  it("点击分组标题展开：命令项可见", () => {
     render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
     const headers = screen.getAllByTestId("group-header");
     expect(headers).toHaveLength(1);
 
     fireEvent.click(headers[0]);
-    expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
+    expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
   });
 
-  it("再次点击分组标题展开：命令项恢复", () => {
+  it("再次点击分组标题折叠：命令项隐藏", () => {
     render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
     const headers = screen.getAllByTestId("group-header");
 
     fireEvent.click(headers[0]);
-    expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
+    expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
 
     fireEvent.click(headers[0]);
-    expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
+    expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
   });
 
   it("搜索时自动展开匹配组（即使被折叠）", () => {
     render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
-    const headers = screen.getAllByTestId("group-header");
 
-    // 先折叠
-    fireEvent.click(headers[0]);
+    // 默认折叠，命令项不可见
     expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
 
     // 搜索匹配
@@ -376,17 +398,12 @@ describe("CommandTree 分组折叠/展开", () => {
 
   it("清空搜索后恢复折叠状态", () => {
     render(<CommandTree spec={spec} selected={null} onSelect={vi.fn()} />);
-    const headers = screen.getAllByTestId("group-header");
-
-    // 折叠
-    fireEvent.click(headers[0]);
-    expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
 
     // 搜索（自动展开）
     fireEvent.change(screen.getByPlaceholderText("搜索命令…"), { target: { value: "list" } });
     expect(screen.getAllByTestId("tree-item")).toHaveLength(1);
 
-    // 清空搜索（恢复折叠状态）
+    // 清空搜索（恢复默认折叠状态）
     fireEvent.change(screen.getByPlaceholderText("搜索命令…"), { target: { value: "" } });
     expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
   });
@@ -395,6 +412,13 @@ describe("CommandTree 分组折叠/展开", () => {
     render(<CommandTree spec={twoLevelSpec} selected={null} onSelect={vi.fn()} />);
     const headers = screen.getAllByTestId("group-header");
 
+    // 默认折叠：命令项与子资源均不可见
+    expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
+    expect(screen.queryByText("manage")).not.toBeInTheDocument();
+    expect(screen.queryByText("type")).not.toBeInTheDocument();
+
+    // 展开
+    fireEvent.click(headers[0]);
     expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
     expect(screen.getByText("manage")).toBeInTheDocument();
     expect(screen.getByText("type")).toBeInTheDocument();
@@ -403,11 +427,6 @@ describe("CommandTree 分组折叠/展开", () => {
     fireEvent.click(headers[0]);
     expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
     expect(screen.queryByText("manage")).not.toBeInTheDocument();
-
-    // 展开
-    fireEvent.click(headers[0]);
-    expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
-    expect(screen.getByText("manage")).toBeInTheDocument();
   });
 
   it("重复分组名：折叠/展开独立控制", () => {
@@ -415,15 +434,18 @@ describe("CommandTree 分组折叠/展开", () => {
     const headers = screen.getAllByTestId("group-header");
     expect(headers).toHaveLength(2);
 
-    // 折叠第一个
-    fireEvent.click(headers[0]);
-    expect(screen.getAllByTestId("tree-item")).toHaveLength(1);
-
-    // 折叠第二个
-    fireEvent.click(headers[1]);
+    // 默认折叠：命令项不可见
     expect(screen.queryAllByTestId("tree-item")).toHaveLength(0);
 
     // 展开第一个
+    fireEvent.click(headers[0]);
+    expect(screen.getAllByTestId("tree-item")).toHaveLength(1);
+
+    // 展开第二个
+    fireEvent.click(headers[1]);
+    expect(screen.getAllByTestId("tree-item")).toHaveLength(2);
+
+    // 折叠第一个
     fireEvent.click(headers[0]);
     expect(screen.getAllByTestId("tree-item")).toHaveLength(1);
   });

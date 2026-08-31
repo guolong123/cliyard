@@ -17,6 +17,22 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 export type SideTab = "commands" | "flows" | "favorites";
 
+/** tab 语义色：命令=蓝、常用=紫、流程=绿（浅底 + 色字 + 色下划线） */
+const TAB_THEMES: Record<SideTab, { bg: string; text: string; line: string }> = {
+  commands: { bg: "#EFF6FF", text: brand[600], line: brand[500] }, // 蓝
+  favorites: { bg: "#F5F3FF", text: "#7C3AED", line: "#8B5CF6" }, // 紫
+  flows: { bg: "#ECFDF5", text: "#059669", line: "#10B981" }, // 绿
+};
+
+/** 分组头 accent 色（命令/flow 组共享，按索引循环分配） */
+const GROUP_ACCENTS: { border: string; text: string; bg: string }[] = [
+  { border: brand[500], text: brand[700], bg: brand[50] }, // 蓝
+  { border: "#8B5CF6", text: "#6D28D9", bg: "#F5F3FF" }, // 紫
+  { border: "#10B981", text: "#047857", bg: "#ECFDF5" }, // 绿
+  { border: "#F59E0B", text: "#B45309", bg: "#FFFBEB" }, // 琥珀
+  { border: "#F43F5E", text: "#BE123C", bg: "#FFF1F2" }, // 玫红
+];
+
 /** 选中项：命令 = {kind:"command", target:"resource.method"}；flow = {kind:"flow", target: flow.command} */
 export interface Selection {
   kind: "command" | "flow";
@@ -50,7 +66,7 @@ const treeCss = `
     position: relative; display: flex; flex-direction: column; gap: 2px;
     width: 100%; padding: ${space.sm - 2}px ${space.md}px ${space.sm - 2}px ${space.md + 4}px;
     border: none; border-radius: ${radius.md}px; cursor: pointer; text-align: left;
-    background-color: transparent; color: ${neutral[600]};
+    background-color: transparent; color: var(--acc-text, #334155);
     font-size: ${fontSize.sm}px; font-family: ${fontFamily.mono};
     transition: background-color .15s ease, color .15s ease;
   }
@@ -68,7 +84,7 @@ const treeCss = `
     position: relative; display: flex; flex-direction: column; gap: 2px;
     width: 100%; padding: ${space.sm}px ${space.md}px ${space.sm}px ${space.md + 4}px;
     border: none; border-radius: ${radius.md}px; cursor: pointer; text-align: left;
-    background-color: transparent; color: ${neutral[600]};
+    background-color: transparent; color: var(--acc-text, ${neutral[600]});
     font-size: ${fontSize.sm}px; font-family: ${fontFamily.body};
     transition: background-color .15s ease, color .15s ease;
   }
@@ -86,9 +102,9 @@ const treeCss = `
     font-size: ${fontSize.sm}px; font-family: ${fontFamily.mono};
     transition: background-color .15s ease, border-color .15s ease;
   }
-  .cliyard-favorite-item:hover { background-color: ${neutral[100]}; }
-  .cliyard-favorite-item[data-active="true"] { background-color: ${brand[50]}; color: ${brand[600]}; font-weight: 500; }
-  .cliyard-favorite-item[data-active="true"]:hover { background-color: ${brand[50]}; }
+  .cliyard-favorite-item:hover { background-color: color-mix(in srgb, var(--fav-color, ${neutral[100]}) 15%, ${neutral[50]}); }
+  .cliyard-favorite-item[data-active="true"] { background-color: color-mix(in srgb, var(--fav-color, ${brand[50]}) 20%, ${brand[50]}); color: ${brand[600]}; font-weight: 500; }
+  .cliyard-favorite-item[data-active="true"]:hover { background-color: color-mix(in srgb, var(--fav-color, ${brand[50]}) 30%, ${brand[50]}); }
 `;
 
 /** 选中指示条：左侧 3px 品牌蓝竖条（命令项/flow 项共用） */
@@ -163,9 +179,10 @@ function EmptyState({ text }: { text: string }) {
 export default function CommandTree({ spec, selected, onSelect }: CommandTreeProps) {
   const [sideTab, setSideTab] = useState<SideTab>("commands");
   const [search, setSearch] = useState("");
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
-    return new Set(spec.groups.map((_, i) => `${spec.groups[i].group}-${i}`));
-  });
+  // 命令组默认折叠
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
+    () => new Set(),
+  );
   // flow 组默认折叠
   const [expandedFlowGroups, setExpandedFlowGroups] = useState<Set<string>>(
     () => new Set(),
@@ -350,7 +367,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
   }, [expandedFlowGroups, groupedFlows, searchActive]);
 
   /** 命令项按钮（target = 资源名.方法名，与 executor 的 resource.method 语义一致） */
-  const renderCommandItem = (c: TreeItem, targetPrefix: string, groupName: string) => {
+  const renderCommandItem = (c: TreeItem, targetPrefix: string, groupName: string, acc: { border: string; text: string; bg: string }) => {
     const target = `${targetPrefix}.${c.name}`;
     const on = selected?.kind === "command" && selected.target === target;
     const isFav = favorites.some((f) => f.target === target);
@@ -362,7 +379,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
           data-active={on ? "true" : "false"}
           onClick={() => onSelect({ kind: "command", target })}
           className="cliyard-tree-item"
-          style={{ flex: 1, minWidth: 0 }}
+          style={{ flex: 1, minWidth: 0, ["--acc-text" as string]: acc.text }}
         >
           {on && <ActiveBar top={14} />}
           {/* 主行：mono 名称 + labels pill */}
@@ -387,7 +404,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
             <span
               style={{
                 fontSize: fontSize.xs,
-                color: neutral[500],
+                color: "#2A2F37",
                 lineHeight: 1.5,
                 overflow: "hidden",
                 display: "-webkit-box",
@@ -489,16 +506,17 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
             onClick={() => setSideTab(t.id)}
             style={{
               border: "none",
-              background: "transparent",
               cursor: "pointer",
               padding: `${space.sm}px ${space.md}px`,
               marginBottom: -1,
               fontSize: fontSize.md,
               fontFamily: fontFamily.body,
-              borderBottom: `2px solid ${sideTab === t.id ? brand[500] : "transparent"}`,
-              color: sideTab === t.id ? brand[600] : neutral[500],
+              borderRadius: `${radius.sm}px ${radius.sm}px 0 0`,
+              backgroundColor: sideTab === t.id ? TAB_THEMES[t.id].bg : "transparent",
+              borderBottom: `2px solid ${sideTab === t.id ? TAB_THEMES[t.id].line : "transparent"}`,
+              color: sideTab === t.id ? TAB_THEMES[t.id].text : neutral[500],
               fontWeight: sideTab === t.id ? 500 : 400,
-              transition: "color .15s ease, border-color .15s ease",
+              transition: "color .15s ease, border-color .15s ease, background-color .15s ease",
             }}
           >
             {t.label}
@@ -569,30 +587,23 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                       alignItems: "center",
                       gap: space.sm,
                       marginBottom: space.sm,
+                      padding: `4px 6px`,
+                      borderRadius: radius.sm,
+                      backgroundColor: `${color}10`,
                     }}
                   >
-                    <span
-                      style={{
-                        display: "inline-block",
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        backgroundColor: color,
-                        flexShrink: 0,
-                      }}
-                    />
                     <span
                       style={{
                         fontSize: fontSize.sm,
                         fontWeight: 600,
                         textTransform: "uppercase",
                         letterSpacing: 0.06,
-                        color: neutral[700],
+                        color: color,
                       }}
                     >
                       {group}
                     </span>
-                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                    <span style={{ fontSize: fontSize.xs, color: `${color}80` }}>
                       {items.length}
                     </span>
                   </div>
@@ -607,7 +618,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                           data-active={on ? "true" : "false"}
                           onClick={() => onSelect({ kind: "command", target: f.target })}
                           style={{
-                            borderLeft: `3px solid ${color}40`,
+                            ["--fav-color" as string]: color,
                           }}
                         >
                           {on && <ActiveBar top={14} />}
@@ -616,6 +627,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                               style={{
                                 fontFamily: fontFamily.mono,
                                 fontSize: fontSize.sm,
+                                color: color,
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
                                 whiteSpace: "nowrap",
@@ -627,7 +639,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                             <span
                               style={{
                                 fontSize: fontSize.xs,
-                                color: neutral[400],
+                                color: `${color}80`,
                                 fontFamily: fontFamily.mono,
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
@@ -668,6 +680,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
             {filteredGroups.map((g, i) => {
               const key = `${g.group}-${i}`;
               const expanded = effectiveExpanded.has(key);
+              const acc = GROUP_ACCENTS[i % GROUP_ACCENTS.length];
               return (
                 <div key={key}>
                   <button
@@ -680,10 +693,11 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                       alignItems: "center",
                       gap: space.xs,
                       width: "100%",
-                      padding: `0 ${space.xs}px`,
+                      padding: `4px ${space.xs}px`,
                       marginBottom: space.sm,
                       border: "none",
-                      background: "transparent",
+                      borderRadius: radius.sm,
+                      backgroundColor: acc.bg,
                       cursor: "pointer",
                       textAlign: "left",
                     }}
@@ -698,7 +712,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                         flexShrink: 0,
                         transition: "transform .15s ease",
                         transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
-                        color: neutral[500],
+                        color: acc.text,
                       }}
                     >
                       <svg viewBox="0 0 8 8" width={6} height={6} fill="currentColor">
@@ -712,7 +726,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                         fontWeight: 600,
                         textTransform: "uppercase",
                         letterSpacing: 0.06,
-                        color: neutral[700],
+                        color: acc.text,
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
@@ -742,14 +756,14 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                           <div key={`${g.group}-${r.name}-${ri}`}>
                             {renderResourceHeader(r)}
                             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                              {r.commands.map((c) => renderCommandItem(c, r.name, g.group))}
+                              {r.commands.map((c) => renderCommandItem(c, r.name, g.group, acc))}
                             </div>
                           </div>
                         ))}
                       </div>
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        {g.commands.map((c) => renderCommandItem(c, g.group, g.group))}
+                        {g.commands.map((c) => renderCommandItem(c, g.group, g.group, acc))}
                       </div>
                     ))}
                 </div>
@@ -764,6 +778,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
           {groupedFlows.map(([cat, flows]) => {
             const catLabel = flows[0]?.category_label || cat;
             const expanded = effectiveExpandedFlowGroups.has(cat);
+            const acc = GROUP_ACCENTS[groupedFlows.map(([c]) => c).indexOf(cat) % GROUP_ACCENTS.length];
             return (
               <div key={cat}>
                 {/* 分组头 - 沿用命令组头的折叠样式 */}
@@ -784,10 +799,11 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                     alignItems: "center",
                     gap: space.xs,
                     width: "100%",
-                    padding: `0 ${space.xs}px`,
+                    padding: `4px ${space.xs}px`,
                     marginBottom: space.sm,
                     border: "none",
-                    background: "transparent",
+                    borderRadius: radius.sm,
+                    backgroundColor: acc.bg,
                     cursor: "pointer",
                     textAlign: "left",
                   }}
@@ -802,7 +818,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                       flexShrink: 0,
                       transition: "transform .15s ease",
                       transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
-                      color: neutral[500],
+                      color: acc.text,
                     }}
                   >
                     <svg viewBox="0 0 8 8" width={6} height={6} fill="currentColor">
@@ -816,7 +832,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                       fontWeight: 600,
                       textTransform: "uppercase",
                       letterSpacing: 0.06,
-                      color: neutral[700],
+                      color: acc.text,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
@@ -828,8 +844,9 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                     style={{
                       flexShrink: 0,
                       fontSize: fontSize.xs,
-                      color: neutral[400],
+                      color: acc.text,
                       fontWeight: 400,
+                      opacity: 0.8,
                     }}
                   >
                     {flows.length}
@@ -848,6 +865,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                           data-active={on ? "true" : "false"}
                           onClick={() => onSelect({ kind: "flow", target: f.command })}
                           className="cliyard-flow-item"
+                          style={{ ["--acc-text" as string]: acc.text }}
                         >
                           {on && <ActiveBar top={14} />}
                           {/* 名称行：mono 名称 + flow pill + 参数数 */}

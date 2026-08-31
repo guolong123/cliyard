@@ -56,12 +56,12 @@
   --radius-pill: 999px;
 
   /* 字号 */
-  --font-size-xs: 11px;
-  --font-size-sm: 12px;
-  --font-size-md: 13px;
-  --font-size-lg: 15px;
-  --font-size-xl: 18px;
-  --font-size-xxl: 22px;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 19px;
+  --font-size-xxl: 23px;
 
   /* 字体 */
   --font-family-body: "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei",
