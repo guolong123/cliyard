@@ -36,7 +36,9 @@ export const statusColors: Record<StatusKey, StatusTheme> = {
 /* ---------------------------------- 中性色 ---------------------------------- */
 export const neutral = {
   900: "#0F172A",
+  850: "#23272E",
   800: "#1E293B",
+  750: "#2A2F37",
   700: "#334155",
   600: "#475569",
   500: "#64748B",
@@ -46,6 +48,42 @@ export const neutral = {
   100: "#F1F5F9",
   50: "#F8FAFC",
 } as const;
+
+/* ---------------------------------- accent 调色板（tab/分组/命令/流程着色） ---------------------------------- */
+export interface AccentTheme {
+  /** 主色文字（对比度最高） */
+  text: string;
+  /** 浅底 */
+  bg: string;
+  /** 选中/主色强调 */
+  line: string;
+}
+
+/** tab 与分组共享的 accent 语义色：蓝（命令/默认）、紫（常用）、绿（流程）、琥珀、玫红 */
+export const accent: { blue: AccentTheme; violet: AccentTheme; emerald: AccentTheme; amber: AccentTheme; rose: AccentTheme } = {
+  blue: { text: brand[700], bg: brand[50], line: brand[500] },
+  violet: { text: "#6D28D9", bg: "#F5F3FF", line: "#8B5CF6" },
+  emerald: { text: "#047857", bg: "#ECFDF5", line: "#10B981" },
+  amber: { text: "#B45309", bg: "#FFFBEB", line: "#F59E0B" },
+  rose: { text: "#BE123C", bg: "#FFF1F2", line: "#F43F5E" },
+} as const;
+
+/** tab 主题映射：命令=蓝、常用=紫、流程=绿 */
+export const tabAccent: Record<"commands" | "flows" | "favorites", AccentTheme> = {
+  commands: accent.blue,
+  flows: accent.emerald,
+  favorites: accent.violet,
+};
+
+/** tab 顺序数组（渲染用），保持与 tabAccent 一一对应 */
+export const tabOrder = ["commands", "favorites", "flows"] as const;
+
+/** tab 显示文本 */
+export const tabLabel: Record<"commands" | "flows" | "favorites", string> = {
+  commands: "命令",
+  flows: "流程",
+  favorites: "⭐ 常用命令",
+};
 
 /* ---------------------------------- 间距（4px 基准） ---------------------------------- */
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;

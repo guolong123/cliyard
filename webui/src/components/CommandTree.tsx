@@ -8,7 +8,12 @@ import {
   fontSize,
   fontFamily,
   statusColors,
+  accent,
+  tabAccent,
+  tabOrder,
+  tabLabel,
   type StatusTheme,
+  type AccentTheme,
 } from "../styles/tokens";
 import type { Flow, GroupResource, SpecData, TreeItem, Favorite } from "../api/client";
 import { fetchFavorites, toggleFavorite } from "../api/client";
@@ -17,20 +22,13 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 export type SideTab = "commands" | "flows" | "favorites";
 
-/** tab 语义色：命令=蓝、常用=紫、流程=绿（浅底 + 色字 + 色下划线） */
-const TAB_THEMES: Record<SideTab, { bg: string; text: string; line: string }> = {
-  commands: { bg: "#EFF6FF", text: brand[600], line: brand[500] }, // 蓝
-  favorites: { bg: "#F5F3FF", text: "#7C3AED", line: "#8B5CF6" }, // 紫
-  flows: { bg: "#ECFDF5", text: "#059669", line: "#10B981" }, // 绿
-};
-
-/** 分组头 accent 色（命令/flow 组共享，按索引循环分配） */
-const GROUP_ACCENTS: { border: string; text: string; bg: string }[] = [
-  { border: brand[500], text: brand[700], bg: brand[50] }, // 蓝
-  { border: "#8B5CF6", text: "#6D28D9", bg: "#F5F3FF" }, // 紫
-  { border: "#10B981", text: "#047857", bg: "#ECFDF5" }, // 绿
-  { border: "#F59E0B", text: "#B45309", bg: "#FFFBEB" }, // 琥珀
-  { border: "#F43F5E", text: "#BE123C", bg: "#FFF1F2" }, // 玫红
+/** 分组头 accent 轮换顺序（命令/flow 组共享，按索引循环分配）：蓝→紫→绿→琥珀→玫红 */
+const GROUP_ACCENTS: AccentTheme[] = [
+  accent.blue,
+  accent.violet,
+  accent.emerald,
+  accent.amber,
+  accent.rose,
 ];
 
 /** 选中项：命令 = {kind:"command", target:"resource.method"}；flow = {kind:"flow", target: flow.command} */
@@ -325,6 +323,12 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
     return Object.entries(groups);
   }, [filteredFlows]);
 
+  // 预计算 flow 分组 accent（按分组顺序循环分配），避免渲染时 map+indexOf 的 O(n²)
+  const flowGroupAccents = useMemo<AccentTheme[]>(
+    () => groupedFlows.map((_, i) => GROUP_ACCENTS[i % GROUP_ACCENTS.length]),
+    [groupedFlows],
+  );
+
   // 搜索时自动展开所有匹配到的 flow 组；无搜索词时尊重用户折叠状态
   const searchActive = q !== "";
 
@@ -367,7 +371,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
   }, [expandedFlowGroups, groupedFlows, searchActive]);
 
   /** 命令项按钮（target = 资源名.方法名，与 executor 的 resource.method 语义一致） */
-  const renderCommandItem = (c: TreeItem, targetPrefix: string, groupName: string, acc: { border: string; text: string; bg: string }) => {
+  const renderCommandItem = (c: TreeItem, targetPrefix: string, groupName: string, acc: AccentTheme) => {
     const target = `${targetPrefix}.${c.name}`;
     const on = selected?.kind === "command" && selected.target === target;
     const isFav = favorites.some((f) => f.target === target);
@@ -404,7 +408,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
             <span
               style={{
                 fontSize: fontSize.xs,
-                color: "#2A2F37",
+                color: neutral[750],
                 lineHeight: 1.5,
                 overflow: "hidden",
                 display: "-webkit-box",
@@ -491,37 +495,34 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
           marginBottom: space.md,
         }}
       >
-        {(
-          [
-            { id: "commands", label: "命令" },
-            { id: "favorites", label: "⭐ 常用命令" },
-            { id: "flows", label: "流程" },
-          ] as const
-        ).map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            data-testid="side-tab"
-            data-active={sideTab === t.id ? "true" : "false"}
-            onClick={() => setSideTab(t.id)}
-            style={{
-              border: "none",
-              cursor: "pointer",
-              padding: `${space.sm}px ${space.md}px`,
-              marginBottom: -1,
-              fontSize: fontSize.md,
-              fontFamily: fontFamily.body,
-              borderRadius: `${radius.sm}px ${radius.sm}px 0 0`,
-              backgroundColor: sideTab === t.id ? TAB_THEMES[t.id].bg : "transparent",
-              borderBottom: `2px solid ${sideTab === t.id ? TAB_THEMES[t.id].line : "transparent"}`,
-              color: sideTab === t.id ? TAB_THEMES[t.id].text : neutral[500],
-              fontWeight: sideTab === t.id ? 500 : 400,
-              transition: "color .15s ease, border-color .15s ease, background-color .15s ease",
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
+        {tabOrder.map((id) => {
+          const th = tabAccent[id];
+          return (
+            <button
+              key={id}
+              type="button"
+              data-testid="side-tab"
+              data-active={sideTab === id ? "true" : "false"}
+              onClick={() => setSideTab(id)}
+              style={{
+                border: "none",
+                cursor: "pointer",
+                padding: `${space.sm}px ${space.md}px`,
+                marginBottom: -1,
+                fontSize: fontSize.md,
+                fontFamily: fontFamily.body,
+                borderRadius: `${radius.sm}px ${radius.sm}px 0 0`,
+                backgroundColor: sideTab === id ? th.bg : "transparent",
+                borderBottom: `2px solid ${sideTab === id ? th.line : "transparent"}`,
+                color: sideTab === id ? th.text : neutral[500],
+                fontWeight: sideTab === id ? 500 : 400,
+                transition: "color .15s ease, border-color .15s ease, background-color .15s ease",
+              }}
+            >
+              {tabLabel[id]}
+            </button>
+          );
+        })}
       </div>
 
       {sideTab !== "favorites" && (
@@ -775,10 +776,10 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
         <EmptyState text="无 flow" />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
-          {groupedFlows.map(([cat, flows]) => {
+          {groupedFlows.map(([cat, flows], fgIdx) => {
             const catLabel = flows[0]?.category_label || cat;
             const expanded = effectiveExpandedFlowGroups.has(cat);
-            const acc = GROUP_ACCENTS[groupedFlows.map(([c]) => c).indexOf(cat) % GROUP_ACCENTS.length];
+            const acc = flowGroupAccents[fgIdx % flowGroupAccents.length];
             return (
               <div key={cat}>
                 {/* 分组头 - 沿用命令组头的折叠样式 */}
