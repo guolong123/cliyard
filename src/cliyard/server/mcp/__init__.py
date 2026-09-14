@@ -17,6 +17,7 @@ from cliyard.server.mcp.executor import MCPExecutor
 from cliyard.server.mcp.server import (
     build_mcp_http_app,
     create_mcp_server,
+    display_host,
     is_local_host,
     mount_mcp_http,
     run_mcp_server,
@@ -32,5 +33,6 @@ __all__ = [
     "mount_mcp_http",
     "run_mcp_server",
     "run_mcp_stdio",
+    "display_host",
     "is_local_host",
 ]

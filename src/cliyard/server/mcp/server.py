@@ -59,9 +59,14 @@ class _StaticTokenVerifier:
         return None
 
 
+def display_host(host: str) -> str:
+    """Map wildcard binds to loopback for display/template URLs."""
+    return "127.0.0.1" if host in ("0.0.0.0", "::") else host
+
+
 def _auth_settings_for(token: str, host: str, port: int) -> AuthSettings:
     """构造 Streamable HTTP 鉴权配置（issuer/resource URL 仅为元数据）。"""
-    base = f"http://{host}:{port}" if host not in ("::", "0.0.0.0") else f"http://127.0.0.1:{port}"
+    base = f"http://{display_host(host)}:{port}"
     return AuthSettings(
         issuer_url=f"{base}/.well-known/oauth-authorization-server",
         resource_server_url=base,
@@ -114,6 +119,7 @@ def build_mcp_http_app(
     port: int = 8081,
     path: str = "/mcp",
     upload_base: str | None = None,
+    upload_dir: str | None = None,
 ):
     """构建 Streamable HTTP 的 Starlette app（独立 uvicorn 启动用）。
 
@@ -121,6 +127,8 @@ def build_mcp_http_app(
         token: 提供后启用 bearer 鉴权（``Authorization: Bearer <token>``）。
         upload_base: 对外 ``POST /upload`` 基地址（描述模板透传用，todo 4；
             本 todo 仅写入 ``app.state``，缺省 ``None``）。
+        upload_dir: 上传存储目录（写入 ``app.state.upload_dir`` 供
+            ``mcp_upload_endpoint`` 消费；``None`` → handler 回退默认目录）。
     """
     server = create_mcp_server(spec_dir, server_override=server_override)
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
@@ -131,11 +139,13 @@ def build_mcp_http_app(
         kwargs["auth"] = _auth_settings_for(token, host, port)
         kwargs["token_verifier"] = _StaticTokenVerifier(token)
     app = server.streamable_http_app(**kwargs)
-    _mount_upload_route(app, token=token, upload_base=upload_base)
+    _mount_upload_route(app, token=token, upload_base=upload_base, upload_dir=upload_dir)
     return app
 
 
-def _mount_upload_route(app, *, token: str | None, upload_base: str | None) -> None:
+def _mount_upload_route(
+    app, *, token: str | None, upload_base: str | None, upload_dir: str | None
+) -> None:
     """在 Streamable HTTP app 上挂载 ``POST /upload``（MCP 文件交接点）。
 
     路由追加在 ``/mcp`` 之后、互不吞没（不同 path）；鉴权由
@@ -146,6 +156,7 @@ def _mount_upload_route(app, *, token: str | None, upload_base: str | None) -> N
 
     app.state.upload_token = token
     app.state.upload_base = upload_base
+    app.state.upload_dir = upload_dir
     app.routes.append(Route(path="/upload", endpoint=mcp_upload_endpoint, methods=["POST"]))
 
 
@@ -159,6 +170,7 @@ def mount_mcp_http(
     host: str = "127.0.0.1",
     port: int = 8081,
     upload_base: str | None = None,
+    upload_dir: str | None = None,
 ) -> MCPServer:
     """把 MCP Streamable HTTP 挂载进现有 FastAPI serve（同一端口/uvicorn）。
 
@@ -195,6 +207,8 @@ def mount_mcp_http(
     app.router.routes.insert(0, Route(path="/upload", endpoint=mcp_upload_endpoint, methods=["POST"]))
     if upload_base is not None:
         app.state.upload_base = upload_base
+    if upload_dir is not None:
+        app.state.upload_dir = upload_dir
     _combine_lifespan(app, server.session_manager)
     return server
 
@@ -254,6 +268,9 @@ def run_mcp_server(
     server_override: str | None = None,
     token: str | None = None,
     allow_remote_no_auth: bool = False,
+    upload_dir: str | None = None,
+    upload_base_url: str | None = None,
+    file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     version: str = "0.12.1",
 ) -> None:
     """启动 MCP Server。
@@ -264,11 +281,20 @@ def run_mcp_server(
         server_override: base_url 运行时覆盖（同 CLI ``--server``）。
         token: http transport 的 bearer token（非本地 host 强制要求）。
         allow_remote_no_auth: 显式允许非本地 host 无鉴权启动（不推荐）。
+        upload_dir: 上传存储目录（经 todo 1 ``validate_dir`` 启动
+            fail-fast 校验，resolve 后透传 ``build_mcp_http_app`` 写入
+            ``app.state.upload_dir``）。
+        upload_base_url: 对外基址（透传 ``build_mcp_http_app(upload_base=...)``
+            写入 ``app.state.upload_base``，供 todo 4 模板链）。
+        file_allow_dirs: 额外可读目录（todo 5 的 jail 消费，见 learnings）。
     """
+    from cliyard.server.launcher import check_upload_dir
+
     if transport not in ("stdio", "http"):
         raise click.ClickException(
             f"Unknown transport {transport!r}; expected 'stdio' or 'http'"
         )
+    resolved_upload_dir = check_upload_dir(upload_dir, spec_dir)
     if transport == "stdio":
         run_mcp_stdio(spec_dir, server_override=server_override)
         return
@@ -281,9 +307,10 @@ def run_mcp_server(
         host=host,
         port=port,
         path="/mcp",
+        upload_base=upload_base_url,
+        upload_dir=resolved_upload_dir,
     )
-    display_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
-    url = f"http://{display_host}:{port}/mcp"
+    url = f"http://{display_host(host)}:{port}/mcp"
     click.echo(f"MCP (Streamable HTTP) serving spec {Path(spec_dir).resolve()} at {url}")
     if token:
         click.echo("Bearer token auth enabled (Authorization: Bearer <token>)")

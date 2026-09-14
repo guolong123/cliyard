@@ -17,6 +17,12 @@ from __future__ import annotations
 import click
 import uvicorn  # noqa: F401  (kept as monkeypatch target for existing tests)
 
+from cliyard.cli.mcp_options import (
+    _OPT_FILE_ALLOW_DIRS,
+    _OPT_TOKEN,
+    _OPT_UPLOAD_BASE_URL,
+    _OPT_UPLOAD_DIR,
+)
 from cliyard.server.launcher import run_server
 
 
@@ -29,10 +35,34 @@ from cliyard.server.launcher import run_server
 @click.option("--port", default=8080, type=int, show_default=True, help="Bind port")
 @click.option("--open", is_flag=True, default=False, help="Open browser after startup")
 @click.option("--reload", is_flag=True, default=False, help="Enable uvicorn auto-reload")
-def serve(spec_dir: str, host: str, port: int, open: bool, reload: bool) -> None:
+@_OPT_UPLOAD_DIR
+@_OPT_UPLOAD_BASE_URL
+@_OPT_FILE_ALLOW_DIRS
+@_OPT_TOKEN
+def serve(
+    spec_dir: str,
+    host: str,
+    port: int,
+    open: bool,
+    reload: bool,
+    token: str | None,
+    upload_dir: str,
+    upload_base_url: str | None,
+    file_allow_dirs: tuple[str, ...],
+) -> None:
     """Serve a web UI for the YAML specs in SPEC_DIR.
 
     Turns the spec directory into a FastAPI-powered web interface with
     auto-generated forms, live execution steps, and execution history.
     """
-    run_server(spec_dir, host=host, port=port, open_browser=open, reload=reload)
+    run_server(
+        spec_dir,
+        host=host,
+        port=port,
+        open_browser=open,
+        reload=reload,
+        token=token,
+        upload_dir=upload_dir,
+        upload_base_url=upload_base_url,
+        file_allow_dirs=file_allow_dirs,
+    )

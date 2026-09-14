@@ -35,6 +35,9 @@ def build_mcp_command(spec_dir: str) -> click.Command:
         server: str | None,
         token: str | None,
         allow_remote_no_auth: bool,
+        upload_dir: str,
+        upload_base_url: str | None,
+        file_allow_dirs: tuple[str, ...],
     ) -> None:
         """Start this CLI's spec as an MCP server."""
         run_mcp_server(
@@ -45,6 +48,9 @@ def build_mcp_command(spec_dir: str) -> click.Command:
             server_override=server,
             token=token,
             allow_remote_no_auth=allow_remote_no_auth,
+            upload_dir=upload_dir,
+            upload_base_url=upload_base_url,
+            file_allow_dirs=file_allow_dirs,
         )
 
     return mcp_cmd

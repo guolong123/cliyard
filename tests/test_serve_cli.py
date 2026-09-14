@@ -68,7 +68,16 @@ def test_serve_existing_spec_dir_prints_startup_params_and_launches(monkeypatch)
 
     result = _runner().invoke(
         cli,
-        ["serve", str(_DEMO_SPEC), "--host", "0.0.0.0", "--port", "9000"],
+        [
+            "serve",
+            str(_DEMO_SPEC),
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9000",
+            "--token",
+            "test-token",
+        ],
     )
     assert result.exit_code == 0
     assert "Serve spec" in result.output
@@ -77,6 +86,25 @@ def test_serve_existing_spec_dir_prints_startup_params_and_launches(monkeypatch)
     # uvicorn still binds the real 0.0.0.0 host
     assert launched.get("host") == "0.0.0.0"
     assert launched.get("port") == 9000
+
+
+def test_serve_remote_host_without_token_fails_fast():
+    """非本地 host 无 --token → 启动拒绝（mirror MCP --token 语义）。"""
+    result = _runner().invoke(
+        cli,
+        ["serve", str(_DEMO_SPEC), "--host", "0.0.0.0"],
+    )
+    assert result.exit_code != 0
+
+
+def test_serve_help_shows_upload_options():
+    """``serve --help`` 与 ``mcp --help`` 列出相同的上传三选项 + --token。"""
+    result = _runner().invoke(cli, ["serve", "--help"])
+    assert result.exit_code == 0
+    assert "--upload-dir" in result.output
+    assert "--upload-base-url" in result.output
+    assert "--file-allow-dirs" in result.output
+    assert "--token" in result.output
 
 
 def test_serve_dir_without_auth_yaml_exits_nonzero(tmp_path):
