@@ -143,6 +143,7 @@ class MCPExecutor:
                 upload_dir=self.upload_dir,
                 allow_dirs=self.file_allow_dirs,
                 server_tmp_files=tmp_files,
+                spec_dir=self.spec_dir,
             )
         finally:
             execution_manager._cleanup_tmp_files(tmp_files)
@@ -193,7 +194,8 @@ class MCPExecutor:
             elif name == "flow_end":
                 outcome["outcome"] = payload.get("outcome")
 
-        run_flow(flow_spec, params or {}, service_ctx, service, step_cb=_cb)
+        run_flow(flow_spec, params or {}, service_ctx, service, step_cb=_cb,
+                 spec_dir=self.spec_dir)
         return redact_sensitive(
             {
                 "outcome": outcome.get("outcome", "completed"),
