@@ -172,6 +172,10 @@ def assemble_request(
     params: dict[str, Any],
     base_url: str,
     prefix: str = "",
+    server_mode: bool = False,
+    upload_dir: str | None = None,
+    allow_dirs: list[str] | tuple[str, ...] | str | None = None,
+    server_tmp_files: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> Request:
     """Assemble an HTTP request from YAML spec + user params.
 
@@ -188,6 +192,12 @@ def assemble_request(
             - Any top-level key for path/body template rendering
         base_url: Base URL (e.g. "https://api.example.com")
         prefix: Optional URL prefix (e.g. "/api/v1")
+        server_mode: Gate multipart ``type: file`` paths through the path
+            jail before ``open(rb)``. Bridge-generated temp paths
+            (*server_tmp_files*) bypass. Default ``False`` (CLI unchanged).
+        upload_dir: Upload directory root for the jail (``None`` → default).
+        allow_dirs: Extra server-readable directories (``--file-allow-dirs``).
+        server_tmp_files: Bridge-generated temp paths bypassing the jail.
 
     Returns:
         Request with rendered URL, params, headers, and body.
@@ -301,8 +311,26 @@ def assemble_request(
         # Set file upload from the parsed file_path
         if file_path:
             import os
-            file_name = os.path.basename(file_path)
-            files = {"file": (file_name, open(file_path, "rb"), "application/octet-stream")}
+
+            if server_mode:
+                from cliyard.server.uploads import (
+                    assert_server_readable as _assert_readable,
+                )
+
+                _bypass = set(server_tmp_files or ())
+                _candidates = (
+                    list(file_path)
+                    if isinstance(file_path, (tuple, list))
+                    else [file_path]
+                )
+                for _candidate in _candidates:
+                    if _candidate and _candidate not in _bypass:
+                        _assert_readable(_candidate, upload_dir, allow_dirs)
+                if isinstance(file_path, (tuple, list)):
+                    file_path = file_path[0] if file_path else None
+            if file_path:
+                file_name = os.path.basename(file_path)
+                files = {"file": (file_name, open(file_path, "rb"), "application/octet-stream")}
 
         body = None
     else:

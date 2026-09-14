@@ -117,6 +117,8 @@ def create_app(
     app.state.upload_dir = upload_dir
     app.state.upload_base = upload_base_url
     app.state.file_allow_dirs = tuple(file_allow_dirs or ())
+    execution_manager.server_upload_dir = upload_dir
+    execution_manager.server_allow_dirs = tuple(file_allow_dirs or ())
     # ``POST /api/upload`` 鉴权 token（None = 本地免鉴；见 verify_upload_token）。
     app.state.upload_token = token
 
