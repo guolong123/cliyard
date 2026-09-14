@@ -93,3 +93,9 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **todo5（e7ffc8a）confirmed**：multipart/non-multipart 双 jail 点 server_mode=True 拒 `/etc/hosts`（`CliyError` 含重传指引，首行内容零泄露）vs server_mode=False 照读；upload-dir/allow_dirs（含 `os.pathsep` 字符串形）放行对照；tuple 逐元素拒；bridge-temp bypass 双向（在列则放行、不在则拒）；`_bridge_file_params` exists 短路（已存原值保持、零 tmp；`no-such-file.txt` 原样）；`call_tool` 真路径 is_error=True（含指引、无泄露）；`execute_command` 的 `server_mode=self.transport != "stdio"` 源码确认。
 - **全量回归对照（worktree 法，因已提交故不用 stash 动树）**：现树 `tests/` 562 passed + 15 failed，名单 = mcp_http_e2e×3 + mcp_stdio_e2e×5 + serve_app webui×2 + serve_executor flow×2 + serve_events×1 + server_subcommand×2；78e0a51 基线 worktree 同批 13/13 复现（server_subcommand 除外，基线 5 passed）——除 todo3 的 2 个外无新失败。
 - **打扫 receipts**：4 台验证服务器（18081/18082/18083/18084）已 kill、`ps` 无残留、两端口连通性 down；2 个审计 worktree 已 remove；`/tmp` 与 sys-tmp 下全部 `verify-*`/`custom-up-*`/probe/big11/spec.json 已删；`git stash list` 空；产品树 `src/ tests/` 零 dirty（仅 `.omo/boulder.json` 计划切换 + harness 未跟踪文件，属正常 bookkeeping）；验证全程零产品/测试改动、零提交。
+
+## 2026-09-14 — todo 6: MCP call_tool 双根脱敏（commit 待填）
+
+- **Failure-first 实证（pre-fix，`/tmp/todo6_prefix.py`）**：三类真错 jail/expired/missing 经 `call_tool` 均已 `is_error=True` 且指引 intact（todo 5 落地时已满足）；但 except 通道仅 `_sanitize_error(str(exc), spec_dir)`——含上传目录真值的合成缺参错（`tried <up_real>/stale.txt`）原样透出，`upload real in text: True`，GAP 坐实。
+- **修复（仅 `server/mcp/executor.py`，+8/-2 行）**：顶层 `from cliyard.server.uploads import redact_upload_path`（server→server 无环：uploads 只依赖 `engine.errors` + `server.executor`）+ except 内 `_sanitize_error` → `redact_upload_path(..., self.upload_dir)` 叠加 + 一行双根注释。用户文案逐字节保留（post-fix 同错文本仅真值变 `<upload_dir>`/`<spec_dir>`）。
+- **Post-fix 证据**：同脚本 raw-path 用例 `upload real in text: False`（`<upload_dir>/stale.txt` + `<spec_dir>/repos.yaml`）；`upload_dir=None` 时 `redact_upload_path` 回退 DEFAULT 根，行为不变。`tests/test_mcp_executor.py` 13 passed；`git status` 产品树仅本文件 dirty。

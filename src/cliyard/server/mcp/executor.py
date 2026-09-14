@@ -38,6 +38,7 @@ from cliyard.engine.orchestrator import _lookup_resource_method, run_flow
 from cliyard.server.context import build_service_context
 from cliyard.server.executor import _sanitize_error, execution_manager
 from cliyard.server.redact import redact_sensitive
+from cliyard.server.uploads import redact_upload_path
 
 from cliyard.server.mcp.tools import ToolSpec, build_plugin_tool_specs, build_tool_specs
 
@@ -331,8 +332,13 @@ class MCPExecutor:
             result = await anyio.to_thread.run_sync(self.execute_spec, spec, arguments)
         except Exception as exc:
             logger.exception("MCP tool %s failed", params.name)
+            # 双根脱敏：先 <spec_dir> 再 <upload_dir>（_sanitize_error 只认
+            # spec 根；任一真值均不出镜，占位符除外；用户文案逐字节保留）。
+            text = redact_upload_path(
+                _sanitize_error(str(exc), self.spec_dir), self.upload_dir
+            )
             return CallToolResult(
-                content=[TextContent(type="text", text=_sanitize_error(str(exc), self.spec_dir))],
+                content=[TextContent(type="text", text=text)],
                 is_error=True,
             )
         return CallToolResult(content=[TextContent(type="text", text=_render_result(result))])
