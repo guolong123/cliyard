@@ -303,6 +303,7 @@ def execute_pipeline(
     upload_dir: str | None = None,
     allow_dirs: list[str] | tuple[str, ...] | str | None = None,
     server_tmp_files: list[str] | tuple[str, ...] | set[str] | None = None,
+    spec_dir: str | None = None,
 ) -> dict[str, Any] | str:
     """Execute the full request pipeline and return response data.
 
@@ -330,6 +331,10 @@ def execute_pipeline(
             outputs) that bypass the jail — they are post-bridge artifacts,
             not caller-supplied paths.  Only consumed when *server_mode* is
             ``True``.
+        spec_dir: Spec directory for plugin discovery
+            (``discover_plugins(spec_dir)``); ``None`` scans only the
+            entry-point / global sources.  Threaded through to
+            :func:`execute_plugin_method` for ``type: plugin:*`` methods.
 
     Returns:
         Parsed response data dict (``{items, total}``) by default,
@@ -362,6 +367,44 @@ def execute_pipeline(
             }
         },
     )
+
+    _method_type = method_spec.get("type") or ""
+    if _method_type.startswith("plugin:"):
+        # Plugin methods bypass the HTTP path entirely: no file-content
+        # reading, no field resolvers, no assembler (which would die with
+        # "method_spec.http.method is required"). The plugin reads files
+        # itself under the kernel jail, mirroring CLI behavior.
+        _plugin_name = _method_type[len("plugin:"):]
+        _plugin_result = execute_plugin_method(
+            _plugin_name,
+            kwargs,
+            method_spec,
+            service_ctx,
+            http_client=http_client,
+            base_url_override=base_url_override,
+            spec_dir=spec_dir,
+            server_mode=server_mode,
+            upload_dir=upload_dir,
+            allow_dirs=allow_dirs,
+            server_tmp_files=server_tmp_files,
+            event_cb=event_cb,
+        )
+        _preview = redact_sensitive(_plugin_result)
+        _emit_event(
+            event_cb,
+            "request",
+            {"plugin": _plugin_name, "result_preview": _preview},
+        )
+        _emit_event(
+            event_cb,
+            "response",
+            {"plugin": _plugin_name, "result_preview": _preview},
+        )
+        if isinstance(_plugin_result, dict) and _plugin_result.get("_formatted"):
+            _plugin_result = {
+                k: v for k, v in _plugin_result.items() if k != "_formatted"
+            }
+        return _plugin_result
 
     # Read file-type params (skip for multipart — files stay as paths)
     _is_multipart = method_spec.get("body_type") == "multipart"
