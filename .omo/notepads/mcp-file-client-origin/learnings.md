@@ -47,3 +47,34 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Token 卫生**：模板链全程不接收 token（`build_mcp_http_app` 的 token 只进鉴权/state，不进 schema 函数）；`$TOKEN` 纯占位 + "换成连接本 MCP/serve 所用的 token"一句，不教唆硬编码。证据：116 个 schema/description blob 零命中假 token。
 - **测试变更（LOUD，按计划授权）**：`test_mcp_tools.py::test_schema_type_mapping_in_enum_and_file` 与 `test_serve_schema.py::test_params_to_json_schema_type_mapping` 的 file prop 精确相等断言改为三要素包含断言（curl 行/`$TOKEN`/本地路径句）——其余 29 项零改动通过。`test_serve_executor.py` 2 个 flow 失败经 `git stash` 对照为基线 pre-existing（与本 todo 无关）。`test_mcp_executor/plugin_tools` 51 项中除此 2 外全绿。
 - **环境坑**：裸 `python3` 解析到 ketacli venv 的已安装 cliyard（非本仓）——本仓无 venv，所有验证须 `PYTHONPATH=src`。
+
+## 2026-09-14 — todo 5: path jail 接入 builder/assembler（commit 待填）
+
+- **jail 调用点（精确位置）**：`engine/builder.py::execute_pipeline` 非 multipart 读文件处（`open()` 前，先 jail 后读）；`engine/assembler.py::assemble_request` multipart `open(rb)` 前。两处均为 `if server_mode:` 内联分支 + 懒 import（engine 禁止顶层 import server：`server.uploads` 反向依赖 `server.executor→engine.builder`，顶层 import 必循环）。
+- **签名扩展（全缺省，后向兼容）**：`execute_pipeline(..., server_mode=False, upload_dir=None, allow_dirs=None, server_tmp_files=None)`；`assemble_request` 同样四参；`execute_pipeline` 直透四参给 `assemble_request`。`server_mode=False` 缺省时新增代码零执行（CLI 逐行一致，throwaway 证明）。
+- **PRE-bridge 语义的 bypass 机制（LOUD）**：jail 校验的是桥接前调用方原值——`_bridge_file_params` 把 base64 变成 temp 后，pipeline 已分不清 caller 路径与桥接产物。故 server 两调用点把 `_bridge_file_params` 返回的 `tmp_files` 原样透传为 `server_tmp_files`，jail 跳过其中精确字符串匹配项。WebUI base64 链（temp 落系统 temp 非上传目录）靠此 bypass 不受影响（QA t3 双向证明：带 bypass 放行、不带则 jail）。
+- **exists 短路（`server/executor.py::_bridge_file_params`）**：`isinstance(value,str) and os.path.exists(value)` → `continue`（保持原值、不进 base64 尝试、不进 tmp_files，下游 pipeline 做 jail）。非 str 值不受影响（`_write_base64_temp_file` 原有 None 路径不变）；`no-such-file.txt` 类既非存在路径又非 base64 的仍保持原样（既有用例锁定）。
+- **allow_dirs 缝线（LOUD，按 task 要求记录）**：
+  - serve：`_run_command` 是后台线程、无 app 访问，故 `ExecutionManager` 单例新增 `server_upload_dir=None` / `server_allow_dirs=()`，由 `create_app` 在写 `app.state` 处同步赋值（`app.py` +2 行；launcher 已透传故自动跟随）。刻意未动 `api/execute.py` 路由 handler（MUST NOT）。多 app 同进程为 last-write-wins（单 server 进程假设，v1 可接受）。
+  - MCP：`MCPExecutor.__init__` 新增 `upload_dir/file_allow_dirs`（构造器缝线）；`create_mcp_server` → `MCPExecutor`、`build_mcp_http_app`（新增 `file_allow_dirs` 参）→ `create_mcp_server`、`mount_mcp_http`（新增 `file_allow_dirs` 参）→ `create_mcp_server`；`run_mcp_server` 把既有 `file_allow_dirs` 补传给 `build_mcp_http_app`（todo 3 漏传，本 todo 补上）。
+  - `server_mode` 取值：serve `_run_command` 硬编码 `True`；MCP `execute_command` 取 `self.transport != "stdio"`（todo 4 已把 transport 钉死：http 链全为 `"http"`，stdio 为 `"stdio"`——plan 要求 stdio 同机 `False`，HTTP `True`，无需新增 transport 缝线）。
+- **multiple:true**：两处 jail 均逐元素（tuple/list 展开）；assembler 在 server_mode 下对 tuple/list 取 `[0]` 做 open（与 builder 既有 `[0]` 语义对齐；CLI 缺省路径未动，tuple 仍走原逻辑）。
+- **files 句柄生命周期**：零改动（无新增 close、无新增 open 点；QA t8 手动 close 仅为脚本内防泄漏）。
+- **并发 lane 事件**：开工时 todo 4 有未提交改动（mcp/executor、mcp/server 等）；实施中途 todo 4 提交 `7e50489`，本 todo 工作树 diff 经核对只含自身 6 文件 hunks（`git diff` 逐文件确认），无交织。
+- **验证证据**：throwaway `/tmp/jail_qa.py` 9/9 绿（server 拒 `/etc/hosts` 含重传指引且无内容泄漏；upload-dir 放行；bridge-temp bypass 双向；tuple 逐元素；jail 内缺失→missing-file CliyError 非 FileNotFound；CLI 缺省读外部文件成功；allow_dirs 有/无对照；multipart 双向；bridge 短路三态）。聚焦 `test_serve_executor/mcp_executor/validate_types`：83 pass + 2 flow 失败；全量 `tests/`：529 pass + 15 fail；`git stash` 对照全量同样 15 fail（名单逐项一致：mcp_http_e2e×3、mcp_stdio_e2e×5、serve_app webui×2、serve_executor flow×2、serve_events flow×1、server_subcommand×2——均为基线，与本 todo 无关）。
+
+## 2026-09-14 — todo 7: 端点测试 tests/test_upload_endpoint.py（18 项全绿）
+
+- **Failing-first 探针无产品 bug**：先单跑 200 主用例（字段/落盘/命名），一次通过——当前 `upload.py` + `uploads.py` 契约与 plan 一致，无需产品修复。
+- **413/配额零大文件**：超限测 monkeypatch `api.upload.MAX_UPLOAD_BYTES` + `uploads.MAX_UPLOAD_BYTES`=16，发 17B 即 413；配额测 monkeypatch `uploads.UPLOAD_QUOTA_BYTES`=5，预埋 10B seed 后新上传触发搭车 sweep 淘汰 seed。注意 sweep 读的是 `uploads` 模块全局量，patch 该模块即生效（`_process_upload` 持的是函数对象，patch 常量侧即可）。
+- **sweep 先于 save**：配额断言只能是"旧文件被清 + 新文件 200"，不能断言总数（save 后总数会再次超配额，下次上传才清）。
+- **MCP 侧 TestClient 可直测**：`TestClient(build_mcp_http_app(...))` 作 context manager（lifespan 跑 session manager）即可发 `POST /upload`，无需真起 uvicorn；serve 侧 `create_app(..., token=..., upload_dir=...)` 直连 TestClient。
+- **隔离约定**：全部用例 `tmp_path` 独立 upload_dir（并发 lane 防碰撞）；显式传 `upload_dir`，永不污染 `DEFAULT_UPLOAD_DIR`。
+
+## 2026-09-14 — todo 8: sweep/jail 安全测试（`test_upload_sweep.py` + `test_upload_jail.py`，15 绿）
+
+- **Failing-first 设计（无产品改动）**：外来项（无前缀重要文件、嵌套子目录、symlink）一律 age 到 TTL 之外——guard 移除即误删，测试即红；guard 映射写进 sweep 文件头注释（prefix gate / symlink skip / subdir skip / unlink 前 realpath 复核）。
+- **sweep 时间/配额注入**：`sweep(now=...)` 传参（永不 sleep）；配额测 monkeypatch `uploads` 模块全局量（`UPLOAD_QUOTA_FILES/BYTES`，sweep 调用时读全局，patch 模块即生效）；count 与 bytes 各一测，均断言 oldest-first 淘汰顺序（去哪两个/留哪三个）。
+- **jail pipeline 缝线（无 mock）**：真 `execute_pipeline(server_mode=True, upload_dir=...)` + 最小 method_spec（`type: file` query param）+ 下游 fake HTTP client（非被测单元）+ `raw_response=True` 跳过 output 解析；`server_mode=False` 对照证明 CLI/stdio 零影响；allowlist 源文件在 pipeline + 全过期 sweep 后仍在（never-delete-inputs 铁证）。
+- **隔离约定**：每测独立 `tempfile.mkdtemp`（不用 `tmp_path` 以外的共享目录，防并发 verifier 碰撞），fixture teardown `rmtree` 后断言目录已删；显式传 `upload_dir`，永不碰 `DEFAULT_UPLOAD_DIR`。验证须 `PYTHONPATH=src`（裸 python3 落 ketacli venv，但 PYTHONPATH 优先命中本仓 `src/cliyard/__init__.py`，已实证）。
+- **产品零改动**：`git status` 本 lane 仅两个新测试文件；扫到 bug 只 loud 上报、不修。
