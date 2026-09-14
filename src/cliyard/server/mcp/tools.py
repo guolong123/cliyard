@@ -30,7 +30,7 @@ from typing import Any
 import click
 from mcp.types import Tool
 
-from cliyard.server.schema_bridge import build_command_tree
+from cliyard.server.schema_bridge import _file_upload_guide, build_command_tree
 
 logger = logging.getLogger("cliyard.server.mcp")
 
@@ -108,12 +108,25 @@ def _short_op_desc(cmd: dict[str, Any]) -> str:
 def build_union_schema(
     resource_name: str, resource_desc: str, commands: list[dict]
 ) -> dict[str, Any]:
-    """把同一资源下各操作的 schema 合并为分组工具的 union schema（MINIMAL 版）。
+    """把同一资源下各操作的 schema 合并为分组工具的 union schema。
 
-    当前为最小实现：全量合并各操作的 ``properties``（keep-first），
-    ``required`` 仅保留 ``["operation"]``，顶层 ``description`` 为资源描述 +
-    操作清单。碰撞标注规则（遮蔽语义）与文件上传模板 interplay 由 todo 2
-    在本函数上扩展实现——函数名与签名保持稳定：
+    合并规则（todo 2 定稿）：
+
+    * 全量合并各操作的 ``properties``（keep-first：首个操作的中标定义胜出）。
+    * 碰撞标注：同名字段在不同操作中含义不同（schema 不相等）时，中标定义的
+      ``description`` 追加 ``（X 取自 opA；opB 的 X 被遮蔽，用 opB 时缺该字段走
+      运行时报错）``（多遮蔽操作各一句，以 ``；`` 连接）；定义完全相等的同名字段
+      视为同一含义，不标注。标注只进 ``description``，不引入任何 ``x-`` 扩展。
+    * ``required`` 恒为 ``["operation"]``（各操作自有必填由运行时 binder 收紧）。
+    * 顶层 ``description`` = 资源描述 + ``操作：`` 清单（一操作一行
+      ``<op> - <短描述>``）；逐操作文档只放 description（stdio ``tools/list``
+      实 dump 可达）。
+    * 文件模板 interplay：各操作 schema 里的 file 字段描述已由
+      ``schema_bridge`` 按 ``upload_base`` / ``transport`` 渲染好 curl 指引，
+      合并时原文保留（不重写、不重实现模板函数）；兜底补齐见
+      :func:`_grouped_resource_spec`。
+
+    函数名与签名保持稳定：
 
     ``build_union_schema(resource_name, resource_desc, commands) -> dict``
 
@@ -128,21 +141,46 @@ def build_union_schema(
     """
     op_names: list[str] = [str(cmd.get("name") or "") for cmd in commands]
     op_lines: list[str] = [f"{cmd.get('name')} - {_short_op_desc(cmd)}" for cmd in commands]
-    op_description = "选择要执行的操作（operation），合法值：" + "；".join(op_lines)
+    op_block = "\n".join(op_lines)
     properties: dict[str, Any] = {
         "operation": {
             "type": "string",
             "enum": op_names,
-            "description": op_description,
+            "description": (
+                "选择要执行的操作（operation），合法值：\n" + op_block
+                if op_block
+                else "选择要执行的操作（operation）"
+            ),
         }
     }
+    winner_op: dict[str, str] = {}
+    winner_prop: dict[str, Any] = {}
+    shadowed: dict[str, list[str]] = {}
     for cmd in commands:
+        op = str(cmd.get("name") or "")
         schema = cmd.get("schema") or {}
         for key, value in (schema.get("properties") or {}).items():
             if key not in properties:
-                properties[key] = value
+                properties[key] = dict(value) if isinstance(value, dict) else value
+                winner_op[key] = op
+                winner_prop[key] = value
+            elif key == "operation":
+                continue  # 与操作选择器同名的业务参数直接丢弃（极端边界，见 learnings）
+            elif winner_prop[key] != value:
+                if op not in shadowed.setdefault(key, []):
+                    shadowed[key].append(op)
+    for key, ops in shadowed.items():
+        first = winner_op.get(key, "")
+        clauses = "；".join(
+            f"{op} 的 {key} 被遮蔽，用 {op} 时缺该字段走运行时报错" for op in ops
+        )
+        annotation = f"（{key} 取自 {first}；{clauses}）"
+        prop = properties[key]
+        if isinstance(prop, dict):
+            existing = prop.get("description") or ""
+            prop["description"] = f"{existing}\n{annotation}" if existing else annotation
     base = resource_desc or resource_name
-    description = f"{base} | 操作：{'；'.join(op_lines)}" if op_lines else base
+    description = f"{base}\n操作：\n{op_block}" if op_block else base
     return {
         "type": "object",
         "properties": properties,
@@ -151,11 +189,65 @@ def build_union_schema(
     }
 
 
+def _union_file_fields(commands: list[dict]) -> list[str]:
+    """收集各操作 schema 中 file 类型（含 multiple 数组）的参数名（按出现序去重）。"""
+    names: list[str] = []
+    for cmd in commands:
+        schema = cmd.get("schema") or {}
+        for key, value in (schema.get("properties") or {}).items():
+            if not isinstance(value, dict):
+                continue
+            items = value.get("items")
+            is_file = value.get("format") == "binary" or (
+                isinstance(items, dict) and items.get("format") == "binary"
+            )
+            if is_file and key not in names:
+                names.append(key)
+    return names
+
+
+def _has_upload_guide(description: str) -> bool:
+    """curl 指引三要素是否齐全（/upload 地址 + $TOKEN 占位 + 本地路径警告）。"""
+    return (
+        "/upload" in description
+        and "$TOKEN" in description
+        and "不要直接填你机器的本地路径" in description
+    )
+
+
 def _grouped_resource_spec(
-    tool_name: str, resource_name: str, resource_desc: str, commands: list[dict]
+    tool_name: str,
+    resource_name: str,
+    resource_desc: str,
+    commands: list[dict],
+    *,
+    upload_base: str | None = None,
+    transport: str = "http",
 ) -> ToolSpec:
-    """把同一资源的全部 command 条目合并为一条分组 ToolSpec。"""
+    """把同一资源的全部 command 条目合并为一条分组 ToolSpec。
+
+    file 兜底：中标定义本身是 file 类型却缺 curl 指引三要素时（正常命令树不
+    会发生——指引已由 schema_bridge 按本组 ``upload_base`` / ``transport``
+    渲染；仅手工构造的 commands 触发），用 :func:`_file_upload_guide` 按原
+    组合补齐。被碰撞遮蔽的 file 定义不补（标注已指明遮蔽，运行时走报错）。
+    """
     union = build_union_schema(resource_name, resource_desc, commands)
+    props = union.get("properties") or {}
+    for fname in _union_file_fields(commands):
+        prop = props.get(fname)
+        if not isinstance(prop, dict):
+            continue
+        items = prop.get("items")
+        kept_is_file = prop.get("format") == "binary" or (
+            isinstance(items, dict) and items.get("format") == "binary"
+        )
+        if not kept_is_file:
+            continue
+        if _has_upload_guide(prop.get("description") or ""):
+            continue
+        guide = _file_upload_guide(upload_base, transport)
+        existing = prop.get("description") or ""
+        prop["description"] = f"{existing}\n{guide}" if existing else guide
     return ToolSpec(
         name=tool_name,
         kind="grouped",
@@ -192,7 +284,11 @@ def _register_flat_commands(
 
 
 def _register_grouped_commands(
-    tree: dict[str, Any], specs: dict[str, ToolSpec]
+    tree: dict[str, Any],
+    specs: dict[str, ToolSpec],
+    *,
+    upload_base: str | None = None,
+    transport: str = "http",
 ) -> None:
     """分组装配：每资源一条 ToolSpec（消歧规则与扁平一致）。
 
@@ -221,7 +317,10 @@ def _register_grouped_commands(
                 _register(
                     specs,
                     tool_name,
-                    _grouped_resource_spec(tool_name, rname, rdesc, commands),
+                    _grouped_resource_spec(
+                        tool_name, rname, rdesc, commands,
+                        upload_base=upload_base, transport=transport,
+                    ),
                 )
         else:
             # 扁平资源（无 group 字段）：group name == 资源 name
@@ -233,7 +332,8 @@ def _register_grouped_commands(
                 specs,
                 tool_name,
                 _grouped_resource_spec(
-                    tool_name, gname, group.get("desc") or "", commands
+                    tool_name, gname, group.get("desc") or "", commands,
+                    upload_base=upload_base, transport=transport,
                 ),
             )
 
@@ -274,7 +374,9 @@ def build_tool_specs(
     if mode == "flat":
         _register_flat_commands(tree, specs)
     else:
-        _register_grouped_commands(tree, specs)
+        _register_grouped_commands(
+            tree, specs, upload_base=upload_base, transport=transport
+        )
 
     for flow in tree.get("flows") or []:
         name = f"flow.{flow.get('name')}"
