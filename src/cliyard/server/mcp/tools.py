@@ -22,6 +22,7 @@ file→format:binary / json|object→object）；命令级插件则从 click 命
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -91,30 +92,83 @@ def _command_spec(
     )
 
 
-def build_tool_specs(
-    spec_dir: str | Path,
-    *,
-    upload_base: str | None = None,
-    transport: str = "http",
-) -> dict[str, ToolSpec]:
-    """把 spec 命令树 / flow 树映射为 MCP 工具表（``name -> ToolSpec``）。
+def _short_op_desc(cmd: dict[str, Any]) -> str:
+    """取单个 method 的短描述（描述首句；缺省回退方法名）。
+
+    供分组工具 ``operation`` 枚举的逐操作描述用。
+    """
+    name = str(cmd.get("name") or "")
+    desc = str(cmd.get("desc") or "").strip()
+    if not desc:
+        return name
+    first = re.split(r"[。\n.!?！？；;]+", desc)[0].strip()
+    return first or name
+
+
+def build_union_schema(
+    resource_name: str, resource_desc: str, commands: list[dict]
+) -> dict[str, Any]:
+    """把同一资源下各操作的 schema 合并为分组工具的 union schema（MINIMAL 版）。
+
+    当前为最小实现：全量合并各操作的 ``properties``（keep-first），
+    ``required`` 仅保留 ``["operation"]``，顶层 ``description`` 为资源描述 +
+    操作清单。碰撞标注规则（遮蔽语义）与文件上传模板 interplay 由 todo 2
+    在本函数上扩展实现——函数名与签名保持稳定：
+
+    ``build_union_schema(resource_name, resource_desc, commands) -> dict``
 
     Args:
-        spec_dir: cliyard spec 目录。
-        upload_base: 对外 ``POST /upload`` 基地址（透传给 file 参数描述
-            模板；缺省 ``None`` → 占位地址 + 一句配置提示）。
-        transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板；
-            ``"stdio"`` 追加同机 ``file_path`` 段）。
+        resource_name: 资源名（消歧场景传短名；工具名另行组装）。
+        resource_desc: 资源描述（进顶层 description）。
+        commands: 命令树中该资源的原始 command 条目列表（每个含
+            ``name`` / ``desc`` / ``schema``）。
 
     Returns:
-        ``{tool_name: ToolSpec}``，工具名与 /api/execute target 对齐。
-
-    Raises:
-        FileNotFoundError: spec_dir 缺 _auth.yaml 时由 build_command_tree 抛出。
+        分组工具的 ``input_schema``（含 ``operation`` 枚举 + 合并参数）。
     """
-    tree = build_command_tree(spec_dir, upload_base=upload_base, transport=transport)
-    specs: dict[str, ToolSpec] = {}
+    op_names: list[str] = [str(cmd.get("name") or "") for cmd in commands]
+    op_lines: list[str] = [f"{cmd.get('name')} - {_short_op_desc(cmd)}" for cmd in commands]
+    op_description = "选择要执行的操作（operation），合法值：" + "；".join(op_lines)
+    properties: dict[str, Any] = {
+        "operation": {
+            "type": "string",
+            "enum": op_names,
+            "description": op_description,
+        }
+    }
+    for cmd in commands:
+        schema = cmd.get("schema") or {}
+        for key, value in (schema.get("properties") or {}).items():
+            if key not in properties:
+                properties[key] = value
+    base = resource_desc or resource_name
+    description = f"{base} | 操作：{'；'.join(op_lines)}" if op_lines else base
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": ["operation"],
+        "description": description,
+    }
 
+
+def _grouped_resource_spec(
+    tool_name: str, resource_name: str, resource_desc: str, commands: list[dict]
+) -> ToolSpec:
+    """把同一资源的全部 command 条目合并为一条分组 ToolSpec。"""
+    union = build_union_schema(resource_name, resource_desc, commands)
+    return ToolSpec(
+        name=tool_name,
+        kind="grouped",
+        target=tool_name,  # 资源级 target；todo 4 按 operation 转交原 ToolSpec
+        description=str(union.get("description") or tool_name),
+        input_schema=union,
+    )
+
+
+def _register_flat_commands(
+    tree: dict[str, Any], specs: dict[str, ToolSpec]
+) -> None:
+    """扁平装配（与改动前逐行一致；``mode="flat"`` 输出逐 key 不变）。"""
     groups = tree.get("groups") or []
     duplicate_names = _duplicate_resource_names(groups)
     for group in groups:
@@ -135,6 +189,92 @@ def build_tool_specs(
             for cmd in group.get("commands") or []:
                 name = f"{gname}.{cmd.get('name')}"
                 _register(specs, name, _command_spec(name, cmd, group.get("desc") or "", ""))
+
+
+def _register_grouped_commands(
+    tree: dict[str, Any], specs: dict[str, ToolSpec]
+) -> None:
+    """分组装配：每资源一条 ToolSpec（消歧规则与扁平一致）。
+
+    * 唯一资源名 → 工具名 = 资源名（如 ``alpha``）。
+    * 跨组重名 → 工具名 = ``group.resource``（如 ``g1.token``），与扁平
+      ``group.resource.method`` 的三段消歧同规则（``tool.operation`` 拼出
+      扁平名）。
+    * 零 method 资源直接跳过（不断言崩溃；todo 2 钉死语义，此处先行兼容）。
+    """
+    groups = tree.get("groups") or []
+    duplicate_names = _duplicate_resource_names(groups)
+    for group in groups:
+        gname: str = group.get("group") or ""
+        grouped_resources = group.get("resources") or []
+        if grouped_resources:
+            for resource in grouped_resources:
+                rname: str = resource.get("name") or ""
+                rdesc: str = resource.get("desc") or rname
+                commands = resource.get("commands") or []
+                if not commands:
+                    continue
+                if rname in duplicate_names:
+                    tool_name = f"{gname}.{rname}"
+                else:
+                    tool_name = rname
+                _register(
+                    specs,
+                    tool_name,
+                    _grouped_resource_spec(tool_name, rname, rdesc, commands),
+                )
+        else:
+            # 扁平资源（无 group 字段）：group name == 资源 name
+            commands = group.get("commands") or []
+            if not commands:
+                continue
+            tool_name = gname
+            _register(
+                specs,
+                tool_name,
+                _grouped_resource_spec(
+                    tool_name, gname, group.get("desc") or "", commands
+                ),
+            )
+
+
+def build_tool_specs(
+    spec_dir: str | Path,
+    *,
+    upload_base: str | None = None,
+    transport: str = "http",
+    mode: str = "flat",
+) -> dict[str, ToolSpec]:
+    """把 spec 命令树 / flow 树映射为 MCP 工具表（``name -> ToolSpec``）。
+
+    Args:
+        spec_dir: cliyard spec 目录。
+        upload_base: 对外 ``POST /upload`` 基地址（透传给 file 参数描述
+            模板；缺省 ``None`` → 占位地址 + 一句配置提示）。
+        transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板；
+            ``"stdio"`` 追加同机 ``file_path`` 段）。
+        mode: ``"flat"``（缺省，与改动前逐 key 一致，每 method 一工具）或
+            ``"grouped"``（每 resource 一工具，``operation`` 枚举选方法；
+            flow / ``cmd.*`` 透传不变）。
+
+    Returns:
+        ``{tool_name: ToolSpec}``，工具名与 /api/execute target 对齐。
+
+    Raises:
+        FileNotFoundError: spec_dir 缺 _auth.yaml 时由 build_command_tree 抛出。
+        ValueError: ``mode`` 非 ``"flat"`` / ``"grouped"``。
+    """
+    if mode not in ("flat", "grouped"):
+        raise ValueError(
+            f"unknown MCP tool mode {mode!r} (expected 'flat' or 'grouped')"
+        )
+    tree = build_command_tree(spec_dir, upload_base=upload_base, transport=transport)
+    specs: dict[str, ToolSpec] = {}
+
+    if mode == "flat":
+        _register_flat_commands(tree, specs)
+    else:
+        _register_grouped_commands(tree, specs)
 
     for flow in tree.get("flows") or []:
         name = f"flow.{flow.get('name')}"
