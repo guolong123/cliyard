@@ -153,7 +153,7 @@ def test_execute_command_bridges_file_param_and_cleans_up(monkeypatch):
 def test_execute_flow_collects_step_summary(monkeypatch):
     """flow 执行经 step_cb 汇总 step 结果。"""
 
-    def fake_run_flow(flow_spec, params, service_ctx, service, step_cb=None):
+    def fake_run_flow(flow_spec, params, service_ctx, service, step_cb=None, spec_dir=None):
         step_cb("step_start", {"index": 1, "id": "s1"})
         step_cb("step_done", {"id": "s1", "label": "第一步", "status": "ok", "result_preview": "1"})
         step_cb("flow_end", {"outcome": "completed", "step_count": 1})
