@@ -88,3 +88,27 @@ Conventions, patterns, and successful approaches discovered during work on this 
   `MCPExecutor(tool_mode='grouped').tool_specs` keys 与直调 `build_tool_specs(mode='grouped')` 完全一致。
 - `pytest tests/test_serve_cli.py tests/test_mcp_tools.py -v` → 20 passed（零测试修改）。
 - LSP 不可用（basedpyright 未安装且用户已拒装）；以全模块 import OK + focused pytest 代替。
+
+## 2026-09-14 — todo 3 fixup: UsageError 出口 exit 2（__main__.py）
+
+### Root cause（已证实）
+- `cli/__main__.py:main()` 以 `cli(standalone_mode=False)` 调用，`UsageError`
+  变成抛异常而非进程退出；`except UsageError: echo` 后无 `sys.exit` → 非法值 exit 0。
+- BEFORE 证据：`mcp --mcp-tool-mode foo` exit 0；`mcp --transport foo` exit 0（同 bug）；
+  `--help` exit 0。
+
+### Fix（`src/cliyard/cli/__main__.py` 唯一改动，一行）
+- `except UsageError` 分支追加 `sys.exit(2)`（Click 标准码；`sys` 已 import）。
+- `MissingParameter` 有独立的前置分支（仍 exit 0，无变化）；
+  `NoArgsIsHelpError` 是 `UsageError` 子类且其 handler 排在后面（本就 dead code），
+  故裸 `cliyard` 走同一分支：stderr 文案与改前逐字一致（仍 `Error: Usage: ...`），
+  仅退出码 0→2——裸调用本就是 usage error，exit 2 对齐 Click 语义。
+
+### AFTER 证据
+- `mcp examples/demo --mcp-tool-mode foo` → exit 2 + `'foo' is not one of 'flat', 'grouped'`。
+- `mcp examples/demo --transport foo` → exit 2（同 fix 顺带修好，record）。
+- `mcp --help` / `--version` / `gen --help` → exit 0（成功路径无变化）。
+- `cliyard gen`（缺 `--name`，MissingParameter 分支）→ 仍 exit 0（其他错误类无变化）。
+- `pytest tests/test_serve_cli.py -v` → 8 passed；`pytest tests/test_mcp_cli.py -v` →
+  10 passed（sanity；两套皆经 CliRunner 直调 `cli`，不走 `main()`，无 exit-0-on-usage 断言，
+  零测试修改）。
