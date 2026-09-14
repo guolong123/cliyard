@@ -98,6 +98,7 @@ def main():
         click.echo(f"  Usage: cliyard gen --name <name> [--defs-path <path>]")
     except UsageError as e:
         click.echo(f"Error: {e}", err=True)
+        sys.exit(2)
     except NoArgsIsHelpError as e:
         click.echo(e.format_message())
     except SystemExit:
