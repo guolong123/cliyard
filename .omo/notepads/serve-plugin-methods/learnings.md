@@ -144,3 +144,28 @@ if _method_type.startswith("plugin:"):
 - 全 suite：8 failed 皆基线——3 mcp_http_e2e + 2 serve_app（HEAD worktree 同败，环境类）；
   3 flow 事件（`test_run_flow_step_callback` + serve executor ×2，既往 HEAD 已证）。
 - 产品代码零改动（本 todo 只动 tests + notepad）。
+
+# serve-plugin-methods learnings — todo 5 (2026-09-14)
+
+## 新文件 `tests/test_plugin_method_e2e.py`（6 tests，全绿）
+Fixture（dashboard_create 形态，文件内自建，不碰 mcp_helpers）：
+- `dashboards.yaml`：`create`（`type: plugin:e2e_dash_create` + `title` + `chart_file: type:file` 必填）
+  与 `ghost`（`type: plugin:e2e_no_such_plugin`，无 http 块）。
+- `plugins/e2e_dash_plug_<uuid>.py`：自读 `chart_file` 断言 marker → 经 `http_client`
+  相对路径 POST `/dashboards`（`HttpClient.request` 自动拼 base_url）→ 回显 marker。
+- 测试：MCP/serve 未知名 isError（插件名保留，上游零调用）→ serve 真链
+  upload→execute→done（marker 落 response preview + 上游 POST body）→ MCP 真链同断言 →
+  删服务端文件重调 isError（`POST /upload` 指引）→ stdio 同形免 jail 成功。
+
+## 踩坑记录
+1. 工具名是 `dashboards.create`（资源名=文件名 stem），误写单数 `dashboard.*` 得
+   `Unknown tool`——复数对齐 `/api/execute` target。
+2. serve 错误信息在 `type=="error"` step 的 `message` 上，末条是 `type=="done"`——断言需按 type 找。
+3. 测试内 f-string 生成插件源码时，目标代码的 `}` 需写 `}}`（collection 期 SyntaxError 教训）。
+4. `TestClient(create_app(spec, upload_dir=...))` 与 MCP `build_mcp_http_app` 共用上传链模式；
+   全局 `execution_manager` 串行使用无冲突。
+
+## QA 证据
+- 新文件 6/6 绿；邻居 `test_mcp_stdio_e2e`（9）+ `test_upload_e2e`（4）全绿。
+- `test_mcp_http_e2e` 3 失败为基线环境类（todo 4 HEAD worktree 同败：真 HTTP 会话 peer-error）。
+- 产品代码零改动（本 todo 只加 tests/test_plugin_method_e2e.py + notepad）。
