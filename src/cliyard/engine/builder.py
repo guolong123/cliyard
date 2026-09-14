@@ -48,6 +48,14 @@ class ServiceContext:
     servers: dict | None = None
     timeout: int = 30  # HTTP request timeout in seconds  # All named servers: {name: {base_url, prefix, ...}}
     default_format: str = "json"  # Default --format when spec doesn't set output.default
+    # Server-side file jail roots (stamped by serve/MCP flow runners; flows
+    # inherit via run_flow → FlowContext → execute_pipeline). All default to
+    # CLI behavior (no jail); execute_pipeline only consumes them when the
+    # effective server_mode is True.
+    server_mode: bool = False
+    upload_dir: str | None = None
+    allow_dirs: list[str] | tuple[str, ...] | str | None = None
+    server_tmp_files: list[str] | tuple[str, ...] | set[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -378,9 +386,16 @@ def execute_pipeline(
                             if isinstance(_file_path, (tuple, list))
                             else [_file_path]
                         )
+                        _resolved: list[Any] = []
                         for _candidate in _candidates:
                             if _candidate and _candidate not in _bypass:
-                                _assert_readable(_candidate, upload_dir, allow_dirs)
+                                _resolved.append(
+                                    _assert_readable(_candidate, upload_dir, allow_dirs)
+                                )
+                            else:
+                                _resolved.append(_candidate)
+                        if _resolved:
+                            _file_path = _resolved[0]
                     if isinstance(_file_path, (tuple, list)):
                         _file_path = _file_path[0]
                     if _file_path:

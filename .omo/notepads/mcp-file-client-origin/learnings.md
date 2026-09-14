@@ -109,3 +109,132 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **代理坑（LOUD，环境非产品）**：本机 `HTTP_PROXY=http://127.0.0.1:7890`（dead proxy）使 httpx 信任环境代理、回环 MockUpstream 全变 502——此前 `test_mcp_stdio_e2e` 5 败/`test_mcp_http_e2e` 3 败"基线失败"实为此因（clean-env 下 16/16 全绿，非产品回归）。本文件自带 autouse `_no_proxy` fixture（delenv 四变量 + `NO_PROXY=127.0.0.1,localhost`，文件内隔离）；验证既有 trio 时 shell 侧 `env -u HTTP_PROXY -u HTTPS_PROXY ...`（不动其他文件）。
 - **隔离约定**：每测独立 `tmp_path` upload_dir + MockUpstream  ephemeral 端口（零固定端口、零共享静态目录）；`TestClient` 直连免 lifespan（`/upload` 纯路由）；`upload_dir` 预 `mkdir`；stdio 侧用直调 executor（`transport="stdio"` 语义与子进程一致，免 spawn 开销）。
 - **验证证据**：`PYTHONPATH=src pytest tests/test_upload_e2e.py tests/test_mcp_http_e2e.py tests/test_mcp_stdio_e2e.py` 20 passed；`git status` 仅新文件 + notepad。
+
+## 2026-09-14 — todo 10: 全回归 + README 上传章节（commit 待填）
+
+- **回归（clean-env 全量）**：`env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy PYTHONPATH=src python3 -m pytest tests/ -v` → **573 passed + 8 failed**（29.33s）。开工 `env | grep -i proxy` 实测本机 `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7890`（dead proxy），全程 unset 后跑。
+- **8 失败 worktree bisect 铁证（NOT 凭感觉判 pre-existing）**：`git worktree add /tmp/cliyard-base 78e0a51`（plan 前基线）同 4 文件同 clean-env → **8 failed + 52 passed，失败名单与现树逐项一致**：`test_mcp_http_e2e`×3（standalone/list-and-call、mounted-into-serve、auth；`session.initialize` 报 MCPError peer error，与 upload 链无关）、`test_serve_app` webui×2、`test_serve_events`×1、`test_serve_executor` flow×2（SSE 期望 `step_start` 实得 `flow_start`，事件命名基线漂移）。worktree 已 remove。结论：8 个均为基线 pre-existing，本 plan 零新失败、零产品 bug → 无 needs-fix，按 lane 规则不碰产品代码。
+- **README（仅此一文件）**：API 一览表 +1 行 `POST /api/upload（serve）/ /upload（MCP）`；新增 `### 文件参数（MCP）` 节——curl 三步（上传→execute→重放说明，token 变体）、stdio 例外段、三默认值（TTL 30min / 500MB·1000 个 oldest-first / MAX 10MB→413）、三选项表（`--upload-dir/--upload-base-url/--file-allow-dirs`，`--help` 实测核对缺省文案）+ serve `--token`、边界声明（shell-capable agents only；纯聊天 host 不支持；`source_url` 后续项）。零新文件。
+- **README curl 逐字实执行（非 dry-run）**：`run_server(spec=write_spec(MockUpstream), port=18081→实为18090, upload_dir=/tmp/readme-verify-uploads)` 真机；step1 `curl -F file=@/tmp/report.pdf` → 200 `{"path":".../cliyard-upload-8bee5033-report.pdf","file_name":...,"bytes":20,"expires_at":"2026-09-14T18:06:29.996+08:00"}`；step2 同 path `POST /api/execute repos.upload` → `{"execution_id":"857d..."}` → 轮询 `status:done`（validate/auth/request/upstream-200/format/done 全链，上游 `{"ok": true}`）。服务器已 kill，`/tmp/readme-*` + 探针文件 + 日志已清。
+
+## 2026-09-14 — F1 plan-compliance audit verdict: REJECT（1 blocking，其余 9 通过）
+
+- **方法**：read-only；`git log --oneline -15` 11 个 SHAs 就位（`29f589a` 已 amend 进 `1d29d98`，属正常 amend，非缺失）；`git show --stat` 逐个 spot-check（各提交仅含本 todo  scope + learnings append，无串 scope）；`git status` 产品树干净（仅 `.omo/*` bookkeeping）；全仓 grep `sweep` 确认调用点。
+- **T1 部分通过（store 本体 ✓，触发点 ✗-blocking）**：常量/命名/sweep-guard/deny-list/`is_managed`/`assert_server_readable`/`redact_upload_path`/`DEFAULT_UPLOAD_DIR` 全在 `src/cliyard/server/uploads.py:42-51,97,159,253,309,322,367`；但 acceptance 钉死"sweep 触发点三处"，全仓仅 1 处调用（`src/cliyard/server/api/upload.py:84`，POST handler 内），`MCPExecutor.execute_command`（`server/mcp/executor.py:118`）与 serve `_run_command`/`submit_command`（`server/executor.py:355`）入口均无 `sweep()`。**BLOCKING：补两处搭车 `sweep(upload_dir)`（单次 scandir，永不抛错）即关单。**
+- **T2 ✓**：`POST /api/upload` + `POST /upload`（`api/upload.py:99,113` + `mcp/server.py:185,239` 挂载）、`verify_upload_token`（`api/upload.py:40`）、400/401/413（commit `dbc6607`，测试 15 项 `tests/test_upload_endpoint.py` 全覆盖）。
+- **T3 ✓**：三选项 + serve `--token`（`cli/mcp_options.py`、`cli/serve.py`、`launcher.check_upload_dir:44`、`mcp/server.py:62 display_host`）；mock 回归已由 `77bdb6b` 修复（测试-only）。
+- **T4 ✓**：三要素模板 `_file_upload_guide`（`schema_bridge.py:84-106`：curl 行/`$TOKEN`/本地路径句 + stdio/http 变体 + 占位提示），透传链含计划外最小补齐（LOUD 已记录）。
+- **T5 ✓**：jail 两调用点（`engine/builder.py:365`、`engine/assembler.py:315`）、`server_mode` 取值（serve 硬编码 True `server/executor.py:379`；MCP `transport != "stdio"` `mcp/executor.py:141`）、bridge exists 短路 + tmp bypass；测试 9 项。
+- **T6 ✓**：双根脱敏叠加（`mcp/executor.py:335-339`），文案逐字节保留。
+- **T7 ✓**：`tests/test_upload_endpoint.py` 15 项（200/400/401/413/字段/落盘/命名/`../` 无害化）。
+- **T8 ✓**：`test_upload_sweep.py` 6 项 + `test_upload_jail.py` 9 项（外来零损失/过期清/新鲜留/oldest-first 双维度/jail 三态/pipeline 后输入仍在）。
+- **T9 ✓**：`tests/test_upload_e2e.py` 4 项（重放两次逐字相等 + 落盘仍在、`stdio` vs `http` jail 对照、schema 零 token 真值、删文件后 isError 指引）。
+- **T10 ✓**：README 上传行 + `### 文件参数（MCP）`（curl 三步/token 变体/三默认值/三选项表/边界声明，live curl 已实执行）；全量 573+8 与基线 worktree 逐项一致（记录在案，本审按 MUST-NOT 不重跑）。
+- **Success criteria**：两 shell 走通 ✓ / diff 最小（jail 两点 + exists 短路）✓ / 重放两次 ✓ / 越狱 isError 无泄露 ✓ / 脏扫零误删 ✓ / 文案无 token ✓ / README 可执行 ✓；唯"sweep 三触发点"一子项缺 2/3 → REJECT。
+- **Verdict: REJECT** —— 单一 blocking（T1 sweep 触发点），修复面 2 行，复审只需 grep `sweep(` 三处 +  focused e2e。
+
+## 2026-09-14 — F4 Scope-fidelity audit verdict: APPROVE
+
+- 基线：`git diff 78e0a51..HEAD --stat` = 28 files, 2301+/48-（含 `.omo/*` bookkeeping 6 项 + `README.md` + `src/` 19 项 + `tests/` 8 项）。工作树 dirty 仅 `.omo/boulder.json` + notepad（harness bookkeeping，非产品）。
+- Finding 1（diff-scope 全映射，无 creep）：11 个提交逐个 `git show --stat` 核对——`9b97daa`→todo1（`server/uploads.py` 新建）；`dbc6607`→todo2（`server/api/upload.py` 新建 + `app.py`/`mcp/server.py` 挂载）；`1d29d98`→todo3（`cli/mcp.py`、`cli/mcp_options.py`、`cli/serve.py`、`runtime/mcp_command.py`、`runtime/server_command.py`、`server/app.py`、`server/launcher.py`、`server/mcp/__init__.py`、`tests/test_serve_cli.py`，其中 `server_command.py`/`launcher.py`/`mcp.py` 为透传缝线、`mcp/__init__.py` 为 `display_host` 抽取导出，learnings 均有记录）；`7e50489`→todo4（`server/api/spec.py`、`server/mcp/executor.py`、`server/mcp/server.py`、`server/mcp/tools.py`、`server/schema_bridge.py`、`tests/test_mcp_tools.py`、`test_serve_schema.py`）；`e7ffc8a`→todo5（`engine/assembler.py`、`engine/builder.py`、`server/app.py`、`server/executor.py`、`server/mcp/executor.py`、`server/mcp/server.py`，builder/assembler 接线为计划点名）；`27dffd2`→todo7、`499cc99`→todo8、`9fd27bf`→todo9（新测试三文件）；`77bdb6b`→todo3 fixup（`tests/test_server_subcommand.py` 两处 `**kwargs` mock，为 brief 点名的 plan-mandated seam）；`cf9dfd6`→todo6（`server/mcp/executor.py` +8/-2 双根脱敏）；`9990ed5`→todo10（`README.md` +50）。零未映射产品文件。
+- Finding 2（OUT-list 全守）：(a) 无 `upload.create` 类 MCP 工具——diff grep `upload.create|register.*upload|@mcp.tool.*upload` 零命中，`tools.py` diff 仅 kwargs 透传；(b) 无 `file_content`/base64 新通道——grep 零命中，仅 exists 短路 + `server_tmp_files` bypass；(c) 无 `source_url` 实现——唯一命中为 `README.md:169` 延后声明；(d) CLI 默认行为不变——`builder.py:294`/`assembler.py:175` `server_mode: bool = False`，jail 全在 `if server_mode:` 内（`builder.py:365`、`assembler.py:315`），serve `--token` 仅非本地强制（todo3 计划点名）；(e) 无 DB/线程/新鉴权体系——新增行 grep `threading|sqlite|Lock()|BackgroundTask|create_task` 零命中（唯一含 "threading" 的新增行为 docstring 词义=选项透传），鉴权仅 `verify_upload_token` Depends（todo2 计划点名）+ `_StaticTokenVerifier` 复用；(f) 无 blanket purge——无 `rmtree/purge`，sweep 四 guard 俱在（prefix/symlink-skip/subdir-skip/unlink 前 realpath 复核，`uploads.py:209-243`）；(g) unlink 仅两处且均合法——`uploads.py:220`（guarded sweep 内）+ `server/executor.py:580`（`git blame` 证实为 8 月基线 `_cleanup_tmp_files`，仅清桥接 temp）。
+- Finding 3（结构契约成立）：plan `## Todos` 含 10 行 column-zero `- [x] 1.`…`- [x] 10.`（`:43-106`），`## Final verification wave` 含 4 行 column-zero `- [ ] F1.`…`F4.`（`:115-118`）。
+- Finding 4（deferred 可见）：`README.md:168-169`（纯聊天 host 不支持 + `source_url` 后续项）+ `.omo/drafts/mcp-file-client-origin.md:51,65`（延后 + SSRF 另立项）。
+- Finding 5（观察项，非 REJECT：属 F1 范畴的计划短fall 非 creep）：todo1 钉死 sweep 搭车三处（POST `/upload` + MCP `execute_command` + serve `submit_command`），但 `grep -rn "sweep(" src/cliyard/server/mcp/executor.py src/cliyard/server/executor.py` 零命中，实际调用仅 `server/api/upload.py:84` 一处。未新增任何文件/行为，故不构成 creep，不阻断 F4。
+- Verdict：**APPROVE**——无 creep 文件，OUT-list 七项全守，结构契约与 deferred 标记齐备。
+
+## 2026-09-14 — F2 code-quality review (read-only): verdict REJECT (3 major + 6 minor)
+
+Scope: `git diff 78e0a51..HEAD --stat` = 28 files (+2301/-48); base 78e0a51 confirmed via `git log --oneline -15`
+(plan todo-10 bisect record matches; no re-discovery needed). `py_compile` on all 18 product files: OK.
+No edits/commits made; full test suite NOT run (per MUST NOT DO).
+
+Files examined (all 18 + plan + 4 notepads): `server/uploads.py` (404 lines, new),
+`server/api/upload.py` (153, new), `server/app.py`, `server/launcher.py`,
+`server/mcp/server.py`, `server/mcp/executor.py`, `server/executor.py`,
+`engine/builder.py` + `engine/assembler.py` (diff hunks), `server/schema_bridge.py`,
+`server/mcp/tools.py`, `server/api/spec.py`, `cli/mcp_options.py`, `cli/serve.py`,
+`cli/mcp.py`, `runtime/server_command.py`, `runtime/mcp_command.py`,
+`server/mcp/__init__.py`, plus `engine/orchestrator.py:257-313` (flow path, reached via jail-tracing).
+
+PASS (no finding): hmac compare both auth paths (`api/upload.py:55`, `mcp/server.py:57`);
+mount order safe (`app.py:142` before static `app.py:163`; `mcp/server.py:232,239` insert(0));
+O_EXCL 0600 save + idempotent sweep (multi-worker/threadpool safe); fd lifecycle unchanged;
+no shim leftover (only historical docstring note `api/upload.py:16`); no `upload_id`/`upload.create`/
+PUT-reserve refs; `$TOKEN` placeholder only, token never enters schema chain; Chinese docstrings
+consistent; `tools.py:171-182` dead code confirmed PRE-EXISTING in 78e0a51 (not this change set).
+
+Findings:
+
+1. [major] `server/executor.py` + `server/mcp/executor.py` — 2 of 3 plan-pinned sweep sites missing.
+   Plan line 45 pins sweep at `POST /upload`内 + MCP `execute_command`入口 + serve `submit_command`入口;
+   grep proves `sweep(` is called ONLY at `server/api/upload.py:84`. Expired files are therefore
+   never collected on business-call paths, and `assert_server_readable` (`uploads.py:322`) checks
+   path+existence but NOT TTL — an expired file stays readable indefinitely until someone happens
+   to upload. Fix: add搭车 `sweep()` at `ExecutionManager.submit_command` (or `_run_command` entry)
+   and `MCPExecutor.execute_command` entry (both documented never-raise, cost = one non-recursive scandir).
+2. [major] `engine/orchestrator.py:304-313` — flow `use:` steps bypass the path jail entirely.
+   `execute_use_step` calls `execute_pipeline` WITHOUT `server_mode/upload_dir/allow_dirs`, so serve
+   `POST /api/execute {kind:flow}` and MCP `flow.*` tools with a file-typed step param can open
+   arbitrary server paths (e.g. `/etc/hostname`) despite the todo-5 jail. Fix: thread jail roots
+   through `FlowContext`/`run_flow` → `execute_use_step` (same 4 kwargs, `server_mode=True` on
+   serve/MCP-HTTP, bypass list from bridge tmp files), or explicitly record flow+jail as deferred
+   with a spec-side guard.
+3. [major] `server/api/upload.py:106,149` — unbounded `await file.read()` before the 10MB check.
+   Both endpoints slurp the whole body into RAM and only then compare `len(data) > MAX_UPLOAD_BYTES`
+   (`api/upload.py:79`); no Content-Length pre-check, no streaming cap → single large POST can OOM
+   the server worker. Fix: reject on `content-length` header > MAX upfront and/or stream-read with
+   running cap (413 as soon as exceeded).
+4. [minor] `server/uploads.py:125` via `server/api/upload.py:88,90` — absolute `upload_dir` leaks in
+   API errors. `save_upload` embeds `resolved_dir` in CliyError text; `_process_upload` returns
+   `str(exc)` verbatim (413) and `f"failed to store upload: {exc}"` (500) with no `redact_upload_path`.
+   Fix: wrap both returns with `redact_upload_path(..., upload_dir)`.
+5. [minor] `server/app.py:181-190` + `server/launcher.py:110-125` — `--reload` drops token/upload state.
+   `create_app_from_env` calls `create_app(spec_dir)` bare, so a reloaded worker loses `upload_token`
+   (→ `/api/upload` silently becomes unauthenticated) and upload/jail roots (→ DEFAULT). Known
+   limitation per todo-3 learnings, but the auth-downgrade direction deserves at least a loud
+   warning or env-forwarding. Fix: forward token/upload settings via env or refuse `--reload`+remote.
+6. [minor] `engine/builder.py:~372-390` + `engine/assembler.py:~317-335` — check-then-open TOCTOU.
+   Jail validates `_candidate` but discards the returned realpath and `open()`s the original string,
+   leaving a symlink-swap window. Fix: `open()` the realpath returned by `_assert_readable`
+   (single-element case; keep element-wise validation for multiple:true).
+7. [minor] `server/uploads.py:135-139` — partial file left on failed write. If `f.write` raises
+   mid-stream, the truncated `cliyard-upload-*` file stays and counts toward quota. Fix: unlink
+   `dest` in the `except OSError` arm before raising.
+8. [minor] `server/app.py:120-121` — multi-app same-process last-write-wins on
+   `execution_manager.server_upload_dir/server_allow_dirs` (documented v1 trade-off; fine for one
+   server process, wrong if two `create_app`s share a process). Fix (later): per-spec registry or
+   loud comment at the two assignment lines.
+9. [minor] `server/api/upload.py:134-135` + `server/schema_bridge.py:78-79` — swallowed errors without
+   logging. Form-parse failure → bare 400 with no `logger.warning`; `_display_upload_base` URL-parse
+   failure → silent `pass` (cosmetic fallback, acceptable but unlogged). Fix: one-line
+   `logger.warning`/`logger.debug` in each.
+
+Verdict: REJECT — fix majors 1-3 (sweep sites, flow jail, upload size cap) then re-review; minors 4-9
+may ride along or be filed as follow-ups. No product/test files touched by this review.
+
+## 2026-09-14 — F3 hands-on QA verdict: PASS (5/5 live probes, pasted evidence)
+
+- **Env**：开工 `env | grep -i proxy` → `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7890`（dead proxy）；全部探活用 `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy`，clean 证据 `env|grep -i proxy` exit=1。`PYTHONPATH=src cliyard` 实证 import 自本仓 `src/cliyard/__init__.py`（version 0.14.2）。端口：upstream 18150 / serve 8080 / MCP 18152 / serve+token 18151 / MCP+token 18153（开工全 DOWN，收工全 DOWN）。spec=`tests.mcp_helpers.write_spec`（repos.upload multipart file 真上游 `http://127.0.0.1:18150`）。QA 目录 `/tmp/f3qa-f3run`（已删）；`/tmp/f3qa` 系他人遗留未动。
+- **(a) serve ✓**：README 逐字 `curl -X POST http://127.0.0.1:8080/api/upload -F "file=@report.pdf"` → 200 `{"path":".../up-serve/cliyard-upload-5c9da5a9-report.pdf","file_name":...,"bytes":22,"expires_at":"2026-09-14T18:10:52.841+08:00"}`；README step2 同 path `POST /api/execute repos.upload` → execution `41e6721d…` → 轮询 `status:done`（validate/auth/request/upstream-200/format/done）；上游日志 `POST /repos has_probe_bytes:true`；同 path 重放第二次 → 第二个 `POST /repos has_probe_bytes:true`（不消费删除铁证）。
+- **(b) jailbreak ✓**：`/etc/hostname` 在 macOS 不存在（`ls` 实证）——仍按任务逐字传入 + 加测存在的 `/etc/hosts` 作泄漏断言。`tools/call repos.upload {"file":"/etc/hosts"}` → `IS_ERROR: True` + `文件路径不在允许范围内：/etc/hosts。请先 POST /upload 上传文件，再使用返回的 path 调用`；`grep -c broadcasthost` = 0（零泄漏），`POST /upload` 指引 ×1。
+- **(c) auth ✓**：错 token → `{"detail":"invalid or missing bearer token"}` 401 双路由（S2 `/api/upload` + M2 `/upload`）；正确 token → 双路由 200（含落盘 path）。
+- **(d) CLI ✓**：`cliyard mcp --help` + `cliyard serve --help` 均含 `--upload-dir/--upload-base-url/--file-allow-dirs` 三选项；`--upload-dir /` 双 CLI 均 `ClickException: upload 目录不允许使用系统/家目录：/` exit=1（serve 附 traceback 同样非零）。
+- **(e) sweep ✓**：`up-serve` 预埋外来 `important-keep.txt` + 真上传后 `os.utime` age 2h（`ls` 显示 15:43 vs TTL 30min）；新上传触发搭车 sweep → 200；断言 FOREIGN-SURVIVES yes / EXPIRED-GONE yes / FRESH-TRIGGER-PRESENT yes / FRESH-OLD-PRESENT yes。
+- **环境坑（LOUD，后人必读）**：① `python3 -m cliyard` 不可用（无 `__main__`，入口是 console script `cliyard=cliyard.cli.__main__:main`），须 `PYTHONPATH=src cliyard …`。② macOS 无 `timeout` 命令，fail-fast 用退出码直测。③ 本机除 env 代理外疑似还有系统级代理：httpx `trust_env=True` 即使 env 已 unset 仍回环 502（curl 正常），python 侧探针须 `trust_env=False` 或 `NO_PROXY=127.0.0.1,localhost`（与 todo9 的 NO_PROXY fixture 同根）。④ MCP SDK 版 `streamablehttp_client` 不存在（本机为 `streamable_http.streamable_http_client`，yield 2 元组，且 SDK `initialize()` 对本仓 server 报 peer error——与 todo10 基线 8 失败中的 `test_mcp_http_e2e×3` 同因），故 jailbreak 改走 raw JSON-RPC（initialize→202 initialized→tools/call SSE 解析），仍是真 HTTP 真 server。⑤ zsh 下 `VAR="a b c"; $VAR cmd` 不分词——后台起服须写全前缀。
+- **打扫 receipts**：5 进程（93284/93285/93286/93287/93288）kill 后 `ps` 全 gone；5 端口 curl 全 down；`/tmp/f3qa-f3run` 已删（`ls` 无此目录）；`git status` 产品树零 dirty（仅 `.omo/*` bookkeeping）。零产品/测试/计划文件改动，零提交。
+- **与 F1/F2 的关系**：本 F3 按任务书"经由一次 upload 调用触发"验证 sweep，通过；F1/F2 指出 `execute_command`/`submit_command` 入口缺搭车 sweep 与 flow jail 缺口——属其余路径，不推翻本 F3 证据。
+
+## 2026-09-14 — F1/F2 fix lane：7+1 项全关（commit 待填）
+
+- **Failure-first 实证（`/tmp/f1f2_prefix.py`，pre-fix 全红）**：P1 `grep sweep(` 仅 `api/upload.py:84` 一处；P2 stamp `server_mode=True` 的 `run_flow` 读 `/etc/hosts` 后直达 HTTP（`Connection refused`，jail 零触发）；P3 age 2h 的托管文件 `assert_server_readable` 照常返回 path；P4 `_process_upload` 413 原样透出真 `upload_dir`（`leaks real dir: True`）；P5 `upload.py:106/149` 先 `await read()` 后比长；P6 `create_app_from_env` 只读 `CLIYARD_SPEC_DIR`。
+- **(A) sweep 三触发点**：`mcp/executor.py:124`（`execute_command` 入口 `_sweep_uploads(self.upload_dir)`，顶层 import——`uploads` 只依赖 `engine.errors+server.executor`，沿用 todo6 零环结论）+ `server/executor.py:365`（`_run_command` 入口，函数内懒 import 避开 `uploads→executor` 环）+ 既有 `upload.py:108`。`run_mcp_server` 无需动：HTTP 分支已透传 `resolved_upload_dir→build_mcp_http_app→create_mcp_server→MCPExecutor`（读码确认）；stdio 分支未传（`run_mcp_stdio` 无此参，`mcp/server.py` 不在本 lane 文件清单内故不动——stdio `server_mode=False` 不消费上传目录，`execute_command` 内 `sweep(None)` 回退 DEFAULT 无害）。
+- **(B) flow jail**：`ServiceContext` +4 缺省字段（`builder.py`，CLI 构造全兼容）；`run_flow` +4 可选 kwarg（`None`=继承 stamped `service_ctx`，CLI 不 stamp→恒 False，逐字节一致）；`FlowContext` +4 字段（含 `for_each` 的 `iter_ctx` 透传）；`execute_use_step` 直透给 `execute_pipeline`。两 server 调用方 stamp `service_ctx` 而非向 `run_flow` 传新 kwarg——**原因 LOUD**：`test_mcp_executor.py:156` 的 `fake_run_flow(flow_spec, params, service_ctx, service, step_cb=None)` 签名冻结（MUST NOT 碰测试），传新 kwarg 即 `TypeError`；stamp 走既有对象通道，fake 照过、真链路继承。另加 `isinstance(service_ctx, ServiceContext)` 门卫（该测试把 `build_service_context` mock 成裸 `object()`，直接 stamp 会 `AttributeError`；真链路恒为真类）。证据：同 P2 脚本 post-fix 切 jail（`允许范围`），unstamped CLI 对照仍直达 HTTP（`Connection refused` 非 jail）。
+- **(C) bounded read**：`upload.py` 新增 `_content_length_exceeds`（缺失/非法 header→`None`，回退 post-read 检查，永不抛）+ `_oversized_body`；serve handler 在 `await file.read()` 前 413，MCP handler 在 `await request.form()` **之前** 413（form 解析本身读全体，先查后解是关键顺序）。证据：MAX 压到 64B，200B 文件→413 且 `UploadFile.read` 调用 0 次。
+- **(D) redact**：`_process_upload` 的 413/500 两 `return` 包 `redact_upload_path(..., upload_dir)`。证据：`save_upload` 抛含真路径的 `RuntimeError`→500 体为 `<upload_dir>/xx`，`grep` 响应体零真值。
+- **(E) TTL on read**：`assert_server_readable` 在 `isfile` 后加 `is_managed(real)→mtime age>TTL→同一 missing/expired CliyError`（allowlist 文件非托管，不受 TTL；`getmtime` 失败按缺失处理）。证据：age 文件拒（文案自动带 `<upload_dir>` 脱敏）、新鲜文件照读。
+- **(F) partial-write**：`save_upload` 的 `except OSError` 内先 `os.unlink(dest)`（失败记 warning）再抛 `CliyError`。
+- **(G) reload（选 env-forward，未选 fail-fast，LOUD）**：`run_server` reload 分支写 `CLIYARD_TOKEN/CLIYARD_UPLOAD_DIR/CLIYARD_UPLOAD_BASE_URL/CLIYARD_FILE_ALLOW_DIRS`（缺席值 `pop` 清 stale），`create_app_from_env` 全读回传给 `create_app`。证据：env 灌入后 `create_app_from_env().state` 四值俱在。**singleton-roots limitation（accepted, rare）**：`app.py:120-121` 加注释——多 app 同进程 `execution_manager.server_upload_dir/allow_dirs` last-write-wins，后台线程无 app 访问只能读单例，单 server 进程假设下成立。
+- **(H) log not swallow**：`sweep` 的 4 处 silent `continue`（is_symlink 判定失败/symlink/is_file 判定失败/stat 失败）+ 外来文件跳过各加 `logger.debug`；never-raise 契约不变。
+- **TOCTOU**：`builder.py`/`assembler.py` 两处 jail 后 `open()` 改用 `_assert_readable` 返回的 realpath（tuple 取首元素语义保留，bypass 项保持原值）。
+- **回归**：focused 6 文件 `76 passed + 2 failed`，2 失败经 `git worktree add /tmp/cliyard-base HEAD` 对照为基线 pre-existing（`flow_start` vs `step_start` 命名漂移）；clean-env 全量 `573 passed + 8 failed`，名单与 todo10 基线逐项一致（`mcp_http_e2e×3`/`serve_app webui×2`/`serve_events×1`/`serve_executor flow×2`，其中 `serve_events×1` 亦在 base worktree 复现——本 lane 动过 `run_flow` 签名，特意单测确认）。`git stash` 全程未用。

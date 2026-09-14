@@ -136,6 +136,11 @@ def save_upload(
             with os.fdopen(fd, "wb") as f:
                 f.write(bytes(data))
         except OSError as exc:
+            # 部分写入不留残件：配额统计只认完整文件，截断文件必须删掉。
+            try:
+                os.unlink(dest)
+            except OSError:
+                logger.warning("upload 部分写入清理失败 %s", dest)
             raise CliyError(f"upload 落盘失败：{exc}") from exc
         return {
             "path": dest,
@@ -186,20 +191,25 @@ def sweep(
     for entry in entries:
         try:
             is_symlink = entry.is_symlink()
-        except OSError:
+        except OSError as exc:
+            logger.debug("upload sweep 跳过不可判定项 %s: %s", entry.name, exc)
             continue
         if is_symlink:
+            logger.debug("upload sweep 跳过 symlink %s", entry.name)
             continue
         try:
             if not entry.is_file(follow_symlinks=False):
                 continue  # 子目录等非文件跳过
-        except OSError:
+        except OSError as exc:
+            logger.debug("upload sweep 跳过不可判定项 %s: %s", entry.name, exc)
             continue
         if not entry.name.startswith(UPLOAD_FILENAME_PREFIX):
+            logger.debug("upload sweep 跳过外来文件 %s", entry.name)
             continue  # 外来文件：纹丝不动
         try:
             stat = entry.stat(follow_symlinks=False)
-        except OSError:
+        except OSError as exc:
+            logger.debug("upload sweep 跳过不可 stat 项 %s: %s", entry.name, exc)
             continue
         managed.append((stat.st_mtime, stat.st_size, entry.name))
 
@@ -327,7 +337,9 @@ def assert_server_readable(
     """断言 server 侧可读：realpath 必须在上传目录或 allowlist 内。
 
     越狱（目录外）与缺失文件均抛 ``CliyError``（调用方映射为 isError /
-    可执行错误，不泄露文件内容）。
+    可执行错误，不泄露文件内容）。上传目录内托管文件另受 TTL 约束：
+    mtime 超过 ``UPLOAD_TTL_S`` 即按过期拒绝（过期但尚未被搭车 sweep
+    扫掉的文件不得永久可读）；allowlist 目录文件不受 TTL 约束。
 
     Args:
         path: 调用方传来的 server 路径（桥接前的原值）。
@@ -338,7 +350,7 @@ def assert_server_readable(
         realpath 解析后的绝对路径。
 
     Raises:
-        CliyError: jail 越狱或文件不存在。
+        CliyError: jail 越狱、文件不存在或托管文件已过期。
     """
     if isinstance(allow_dirs, str):
         allow_list = [d for d in allow_dirs.split(os.pathsep) if d.strip()]
@@ -361,6 +373,19 @@ def assert_server_readable(
             f"文件不存在或已过期清理：{redact_upload_path(real, _resolve_dir(upload_dir))}。"
             f"请重新 POST /upload 上传"
         )
+    if is_managed(real, upload_dir):
+        try:
+            age = time.time() - os.path.getmtime(real)
+        except OSError:
+            raise CliyError(
+                f"文件不存在或已过期清理：{redact_upload_path(real, _resolve_dir(upload_dir))}。"
+                f"请重新 POST /upload 上传"
+            ) from None
+        if age > UPLOAD_TTL_S:
+            raise CliyError(
+                f"文件不存在或已过期清理：{redact_upload_path(real, _resolve_dir(upload_dir))}。"
+                f"请重新 POST /upload 上传"
+            )
     return real
 
 
