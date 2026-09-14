@@ -113,11 +113,14 @@ def build_mcp_http_app(
     host: str = "127.0.0.1",
     port: int = 8081,
     path: str = "/mcp",
+    upload_base: str | None = None,
 ):
     """构建 Streamable HTTP 的 Starlette app（独立 uvicorn 启动用）。
 
     Args:
         token: 提供后启用 bearer 鉴权（``Authorization: Bearer <token>``）。
+        upload_base: 对外 ``POST /upload`` 基地址（描述模板透传用，todo 4；
+            本 todo 仅写入 ``app.state``，缺省 ``None``）。
     """
     server = create_mcp_server(spec_dir, server_override=server_override)
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
@@ -127,7 +130,23 @@ def build_mcp_http_app(
     if token:
         kwargs["auth"] = _auth_settings_for(token, host, port)
         kwargs["token_verifier"] = _StaticTokenVerifier(token)
-    return server.streamable_http_app(**kwargs)
+    app = server.streamable_http_app(**kwargs)
+    _mount_upload_route(app, token=token, upload_base=upload_base)
+    return app
+
+
+def _mount_upload_route(app, *, token: str | None, upload_base: str | None) -> None:
+    """在 Streamable HTTP app 上挂载 ``POST /upload``（MCP 文件交接点）。
+
+    路由追加在 ``/mcp`` 之后、互不吞没（不同 path）；鉴权由
+    ``mcp_upload_endpoint`` 内部以 ``_StaticTokenVerifier`` 语义执行，
+    未配置 token（本地回环）时免鉴，与 :func:`is_local_host` 一致。
+    """
+    from cliyard.server.api.upload import mcp_upload_endpoint
+
+    app.state.upload_token = token
+    app.state.upload_base = upload_base
+    app.routes.append(Route(path="/upload", endpoint=mcp_upload_endpoint, methods=["POST"]))
 
 
 def mount_mcp_http(
@@ -139,6 +158,7 @@ def mount_mcp_http(
     token: str | None = None,
     host: str = "127.0.0.1",
     port: int = 8081,
+    upload_base: str | None = None,
 ) -> MCPServer:
     """把 MCP Streamable HTTP 挂载进现有 FastAPI serve（同一端口/uvicorn）。
 
@@ -166,6 +186,15 @@ def mount_mcp_http(
     mcp_app = server.streamable_http_app(**kwargs)
     route = Route(path=path, endpoint=mcp_app)
     app.router.routes.insert(0, route)
+    # ``POST /upload`` 挂父级：子 app 以 endpoint 形式被调用时其内部路由表
+    # 不参与父级 path 匹配，故父级需自有 /upload 路由（与 /mcp 同理插最前，
+    # 避开 serve ``/`` 静态兜底）。endpoint 复用同一实现，鉴权读父 app
+    # 的 ``state.upload_token``（同部署下与 serve /api/upload 同 token）。
+    from cliyard.server.api.upload import mcp_upload_endpoint
+
+    app.router.routes.insert(0, Route(path="/upload", endpoint=mcp_upload_endpoint, methods=["POST"]))
+    if upload_base is not None:
+        app.state.upload_base = upload_base
     _combine_lifespan(app, server.session_manager)
     return server
 

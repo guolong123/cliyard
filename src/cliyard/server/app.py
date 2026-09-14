@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from cliyard.engine.loader import load_flows, load_service
 from cliyard.server.api import router as api_router
+from cliyard.server.api.upload import router as upload_router
 from cliyard.server.executor import execution_manager
 from cliyard.server.history import DEFAULT_HISTORY_DB_PATH, HistoryStore
 
@@ -67,6 +68,7 @@ def _resolve_cors_origins(cors_origins: list[str] | None) -> list[str]:
 def create_app(
     spec_dir: str | os.PathLike[str],
     cors_origins: list[str] | None = None,
+    token: str | None = None,
 ) -> FastAPI:
     """Build the FastAPI application for a YAML spec directory.
 
@@ -81,6 +83,10 @@ def create_app(
             ``None`` → resolve from the ``CLIYARD_CORS_ORIGINS`` environment
             variable (comma-separated), falling back to the Vite dev origins
             (``_DEV_ORIGINS``).
+        token: Optional bearer token guarding ``POST /api/upload`` only
+            (``verify_upload_token`` Depends reads ``app.state.upload_token``).
+            ``None`` → loopback dev mode, no auth (mirrors ``is_local_host``
+            semantics); full ``--token`` threading lands in plan todo 3.
 
     Returns:
         A configured :class:`fastapi.FastAPI` instance.
@@ -104,6 +110,8 @@ def create_app(
 
     app.state.service = service
     app.state.spec_dir = str(spec_path)
+    # ``POST /api/upload`` 鉴权 token（None = 本地免鉴；见 verify_upload_token）。
+    app.state.upload_token = token
 
     # 执行历史存储：~/cliyard/serve_history.db（SQLite, WAL），注入
     # app.state 供 /api/executions 使用，并传给 executor 单例在终态写库。
@@ -120,6 +128,9 @@ def create_app(
     )
 
     app.include_router(api_router)
+    # ``POST /api/upload``：直接挂载（不进 api 聚合包，保持改动面最小）；
+    # 必须在下方 ``/`` 静态兜底之前注册，避免被 StaticFiles 吞掉。
+    app.include_router(upload_router, prefix="/api")
 
     # 挂载 spec 目录下的 logo/ 静态目录（如存在），供 web.branding.logo_url 引用。
     # 前端通过 /spec-static/logo/logo.png 即可访问，路径不随部署环境变化。
