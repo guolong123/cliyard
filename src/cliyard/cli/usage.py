@@ -451,7 +451,9 @@ def generate() -> str:
     P("          required: true")
     P("```")
     P("")
-
+    P("Method plugins also run over serve (`/api/execute`) and MCP (`resource.method` tools) with the same semantics as the CLI.")
+    P('If the result contains `"_formatted": true`, the marker is stripped and the remaining content is returned (the CLI prints nothing in that case).')
+    P("")
     P("### `@register_command(\"name\")` — Top-level command")
     P("")
     P("Add standalone commands (search, mock, etc.) not tied to any resource group.")
