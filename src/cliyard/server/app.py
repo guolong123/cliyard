@@ -117,6 +117,8 @@ def create_app(
     app.state.upload_dir = upload_dir
     app.state.upload_base = upload_base_url
     app.state.file_allow_dirs = tuple(file_allow_dirs or ())
+    # 单进程单 server 假设：多 app 同进程时 execution_manager 的 jail 根以后
+    # 写者为准（last-write-wins）；后台线程无 app 访问，只能读单例。v1 接受。
     execution_manager.server_upload_dir = upload_dir
     execution_manager.server_allow_dirs = tuple(file_allow_dirs or ())
     # ``POST /api/upload`` 鉴权 token（None = 本地免鉴；见 verify_upload_token）。
@@ -183,8 +185,19 @@ def create_app_from_env() -> FastAPI:
 
     ``uvicorn.run(..., reload=True)`` requires an import string rather than
     an app instance; this reads ``CLIYARD_SPEC_DIR`` set by ``cliyard serve``.
+    Auth/upload state (``CLIYARD_TOKEN`` / ``CLIYARD_UPLOAD_DIR`` /
+    ``CLIYARD_UPLOAD_BASE_URL`` / ``CLIYARD_FILE_ALLOW_DIRS``) is forwarded
+    the same way by ``run_server``'s reload branch, so the reloaded worker
+    keeps the token and upload/jail roots.
     """
     spec_dir = os.environ.get("CLIYARD_SPEC_DIR")
     if not spec_dir:
         raise RuntimeError("CLIYARD_SPEC_DIR is not set; run via `cliyard serve`")
-    return create_app(spec_dir)
+    _allow = os.environ.get("CLIYARD_FILE_ALLOW_DIRS")
+    return create_app(
+        spec_dir,
+        token=os.environ.get("CLIYARD_TOKEN"),
+        upload_dir=os.environ.get("CLIYARD_UPLOAD_DIR"),
+        upload_base_url=os.environ.get("CLIYARD_UPLOAD_BASE_URL"),
+        file_allow_dirs=tuple(_allow.split(os.pathsep)) if _allow else None,
+    )

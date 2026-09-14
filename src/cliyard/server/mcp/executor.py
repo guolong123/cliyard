@@ -32,13 +32,13 @@ import anyio
 from mcp.server.lowlevel import Server as MCPServer
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 
-from cliyard.engine.builder import execute_pipeline
+from cliyard.engine.builder import ServiceContext, execute_pipeline
 from cliyard.engine.loader import load_flows, load_service
 from cliyard.engine.orchestrator import _lookup_resource_method, run_flow
 from cliyard.server.context import build_service_context
 from cliyard.server.executor import _sanitize_error, execution_manager
 from cliyard.server.redact import redact_sensitive
-from cliyard.server.uploads import redact_upload_path
+from cliyard.server.uploads import redact_upload_path, sweep as _sweep_uploads
 
 from cliyard.server.mcp.tools import ToolSpec, build_plugin_tool_specs, build_tool_specs
 
@@ -121,6 +121,7 @@ class MCPExecutor:
         与 serve ``_run_command`` 相同路径；file 参数经 base64 桥接写入临时
         文件，执行结束清理。
         """
+        _sweep_uploads(self.upload_dir)
         service = self._load_service()
         resource, method_spec = _lookup_resource_method(target, service)
         service_ctx = build_service_context(
@@ -168,6 +169,13 @@ class MCPExecutor:
             service,
             base_url_override=self.server_override,
         )
+        # 与 execute_command 一致的 jail 语义：stdio 同机免检，HTTP 强制 jail。
+        # isinstance 门卫：单元测试的 build_service_context 双件可返回裸 object，
+        # 此时 run_flow 同样是双件，直接跳过 stamping（真链路恒为 ServiceContext）。
+        if isinstance(service_ctx, ServiceContext):
+            service_ctx.server_mode = self.transport != "stdio"
+            service_ctx.upload_dir = self.upload_dir
+            service_ctx.allow_dirs = self.file_allow_dirs
 
         step_results: list[dict[str, Any]] = []
         outcome: dict[str, Any] = {}

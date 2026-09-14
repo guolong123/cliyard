@@ -112,6 +112,25 @@ def run_server(
         build_app_or_exit(spec_dir, **upload_kwargs)
         # uvicorn --reload needs an import string, not an app instance.
         os.environ["CLIYARD_SPEC_DIR"] = spec_dir
+        # Reload spawns a fresh process via create_app_from_env: forward the
+        # auth/upload state so the reloaded worker keeps the same token and
+        # upload/jail roots instead of silently dropping to unauthenticated
+        # + DEFAULT dir. Absent values clear stale entries from the env.
+        if token is not None:
+            os.environ["CLIYARD_TOKEN"] = token
+        else:
+            os.environ.pop("CLIYARD_TOKEN", None)
+        os.environ["CLIYARD_UPLOAD_DIR"] = resolved_upload_dir
+        if upload_base_url is not None:
+            os.environ["CLIYARD_UPLOAD_BASE_URL"] = upload_base_url
+        else:
+            os.environ.pop("CLIYARD_UPLOAD_BASE_URL", None)
+        if file_allow_dirs:
+            os.environ["CLIYARD_FILE_ALLOW_DIRS"] = os.pathsep.join(
+                str(d) for d in file_allow_dirs
+            )
+        else:
+            os.environ.pop("CLIYARD_FILE_ALLOW_DIRS", None)
         if open_browser:
             webbrowser.open(url)
         click.echo(f"Serve spec {spec_dir} at {url} (reload on)")

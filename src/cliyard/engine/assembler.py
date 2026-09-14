@@ -323,11 +323,18 @@ def assemble_request(
                     if isinstance(file_path, (tuple, list))
                     else [file_path]
                 )
+                _resolved: list[Any] = []
                 for _candidate in _candidates:
                     if _candidate and _candidate not in _bypass:
-                        _assert_readable(_candidate, upload_dir, allow_dirs)
+                        _resolved.append(
+                            _assert_readable(_candidate, upload_dir, allow_dirs)
+                        )
+                    else:
+                        _resolved.append(_candidate)
                 if isinstance(file_path, (tuple, list)):
-                    file_path = file_path[0] if file_path else None
+                    file_path = _resolved[0] if _resolved else None
+                elif _resolved:
+                    file_path = _resolved[0]
             if file_path:
                 file_name = os.path.basename(file_path)
                 files = {"file": (file_name, open(file_path, "rb"), "application/octet-stream")}

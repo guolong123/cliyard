@@ -31,7 +31,7 @@ from starlette.responses import Response as StarletteResponse
 
 from cliyard.engine.errors import CliyError
 from cliyard.server.executor import MAX_UPLOAD_BYTES
-from cliyard.server.uploads import save_upload, sweep
+from cliyard.server.uploads import redact_upload_path, save_upload, sweep
 
 
 router = APIRouter()
@@ -56,6 +56,30 @@ async def verify_upload_token(request: Request) -> None:
     ):
         return None
     raise HTTPException(status_code=401, detail="invalid or missing bearer token")
+
+
+def _content_length_exceeds(request: Request | StarletteRequest) -> int | None:
+    """Declared body size over limit → return it (caller 413s without reading).
+
+    Returns the declared ``Content-Length`` when it exceeds
+    ``MAX_UPLOAD_BYTES``, else ``None``. Missing/unparseable headers fall
+    through to the post-read length check (chunked bodies have no header).
+    Never raises.
+    """
+    try:
+        raw = request.headers.get("content-length")
+        if raw is not None and int(raw) > MAX_UPLOAD_BYTES:
+            return int(raw)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _oversized_body(declared: int) -> dict[str, str]:
+    return {
+        "detail": f"file too large: content-length {declared} bytes "
+        f"exceeds limit of {MAX_UPLOAD_BYTES} bytes"
+    }
 
 
 def _process_upload(
@@ -85,9 +109,11 @@ def _process_upload(
     try:
         saved = save_upload(filename, data, upload_dir)
     except CliyError as exc:
-        return 413, {"detail": str(exc)}
+        return 413, {"detail": redact_upload_path(str(exc), upload_dir)}
     except Exception as exc:  # noqa: BLE001 - 未知落盘错误如实 500
-        return 500, {"detail": f"failed to store upload: {exc}"}
+        return 500, {
+            "detail": redact_upload_path(f"failed to store upload: {exc}", upload_dir)
+        }
     return 200, {
         "path": saved["path"],
         "file_name": saved["file_name"],
@@ -103,6 +129,9 @@ async def upload_file(
     _: None = Depends(verify_upload_token),
 ) -> JSONResponse:
     """``POST /api/upload``（serve 侧经 ``create_app`` 以 ``/api`` 前缀挂载）。"""
+    declared = _content_length_exceeds(request)
+    if declared is not None:
+        return JSONResponse(status_code=413, content=_oversized_body(declared))
     data = await file.read() if file is not None else b""
     filename = file.filename if file is not None else None
     upload_dir = getattr(request.app.state, "upload_dir", None)
@@ -130,6 +159,9 @@ async def mcp_upload_endpoint(request: StarletteRequest) -> StarletteResponse:
             return JSONResponse(
                 status_code=401, content={"detail": "invalid or missing bearer token"}
             )
+    declared = _content_length_exceeds(request)
+    if declared is not None:
+        return JSONResponse(status_code=413, content=_oversized_body(declared))
     try:
         form = await request.form()
     except Exception:

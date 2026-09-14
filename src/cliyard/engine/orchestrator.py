@@ -62,6 +62,10 @@ class FlowContext:
     saved_endpoints: dict = field(default_factory=dict)
     pre_filled_auth: dict | None = None
     step_cb: Callable[[str, dict], None] | None = None
+    server_mode: bool = False
+    upload_dir: str | None = None
+    allow_dirs: Any = None
+    server_tmp_files: Any = None
     _flow_aborted: bool = False
     _flow_skipped: bool = False
     _current_flow: Any = None
@@ -310,6 +314,10 @@ def execute_use_step(
         http_client=context.http_client,
         raw_response=True,
         event_cb=context.step_cb,
+        server_mode=bool(getattr(context, "server_mode", False)),
+        upload_dir=getattr(context, "upload_dir", None),
+        allow_dirs=getattr(context, "allow_dirs", None),
+        server_tmp_files=getattr(context, "server_tmp_files", None),
     )
 
     # Emit a format event for the web UI when the method has output.items_path
@@ -780,6 +788,10 @@ def _execute_for_each(step, context: FlowContext) -> list:
             _current_flow=context._current_flow,
             verbose=context.verbose,
             step_cb=context.step_cb,
+            server_mode=getattr(context, "server_mode", False),
+            upload_dir=getattr(context, "upload_dir", None),
+            allow_dirs=getattr(context, "allow_dirs", None),
+            server_tmp_files=getattr(context, "server_tmp_files", None),
         )
 
         iter_results: dict[str, Any] = {}
@@ -1346,6 +1358,10 @@ def run_flow(
     verbose: bool = False,
     step_cb: Callable[[str, dict], None] | None = None,
     console: Any = None,
+    server_mode: bool | None = None,
+    upload_dir: str | None = None,
+    allow_dirs: Any = None,
+    server_tmp_files: Any = None,
 ) -> None:
     """Execute a flow definition sequentially.
 
@@ -1412,6 +1428,10 @@ def run_flow(
         )
 
     # Build flow context
+    # Server file-jail roots: explicit kwargs win, else inherit the stamped
+    # ServiceContext (serve/MCP runners stamp it; CLI leaves defaults, so
+    # CLI flows stay byte-identical). Flows never bridge base64 file params,
+    # so server_tmp_files is normally None here.
     context = FlowContext(
         flow_params=flow_params,
         http_client=client,
@@ -1425,6 +1445,26 @@ def run_flow(
         step_cb=step_cb,
         _current_flow=flow_spec,
         verbose=verbose,
+        server_mode=(
+            server_mode
+            if server_mode is not None
+            else bool(getattr(service_ctx, "server_mode", False))
+        ),
+        upload_dir=(
+            upload_dir
+            if upload_dir is not None
+            else getattr(service_ctx, "upload_dir", None)
+        ),
+        allow_dirs=(
+            allow_dirs
+            if allow_dirs is not None
+            else getattr(service_ctx, "allow_dirs", None)
+        ),
+        server_tmp_files=(
+            server_tmp_files
+            if server_tmp_files is not None
+            else getattr(service_ctx, "server_tmp_files", None)
+        ),
     )
 
     # --- on_start hooks ---

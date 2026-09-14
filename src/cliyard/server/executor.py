@@ -45,7 +45,7 @@ from uuid import uuid4
 
 from anyio.from_thread import run as _from_thread_run
 
-from cliyard.engine.builder import execute_pipeline
+from cliyard.engine.builder import ServiceContext, execute_pipeline
 from cliyard.engine.loader import load_flows, load_service
 from cliyard.engine.orchestrator import _lookup_resource_method, run_flow
 from cliyard.server.context import build_service_context
@@ -360,6 +360,9 @@ class ExecutionManager:
         http_client_factory: Callable[[], Any] | None,
     ) -> None:
         """命令执行线程体：load_service → lookup → execute_pipeline。"""
+        from cliyard.server.uploads import sweep as _sweep_uploads
+
+        _sweep_uploads(self.server_upload_dir)
         try:
             service = load_service(execution.spec_dir)
             resource, method_spec = _lookup_resource_method(target, service)
@@ -409,6 +412,12 @@ class ExecutionManager:
                     f"Flow {flow_command!r} not found in spec dir {execution.spec_dir}"
                 )
             service_ctx = build_service_context(execution.spec_dir, service)
+            # Flow steps run the same execute_pipeline: stamp the server
+            # file-jail roots so run_flow inherits them (CLI flows unstamped).
+            if isinstance(service_ctx, ServiceContext):
+                service_ctx.server_mode = True
+                service_ctx.upload_dir = self.server_upload_dir
+                service_ctx.allow_dirs = self.server_allow_dirs
             run_flow(
                 flow_spec,
                 params or {},
