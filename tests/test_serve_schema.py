@@ -235,8 +235,14 @@ def test_params_to_json_schema_type_mapping():
     assert props["pet_id"] == {"type": "string", "x-location": "path"}
     # float → number
     assert props["price"] == {"type": "number", "x-location": "body"}
-    # file → string format binary
-    assert props["avatar"] == {"type": "string", "format": "binary", "x-location": "body"}
+    # file → string format binary + todo 4 curl 上传指引（三要素）
+    assert props["avatar"]["type"] == "string"
+    assert props["avatar"]["format"] == "binary"
+    assert props["avatar"]["x-location"] == "body"
+    _avatar_desc = props["avatar"]["description"]
+    assert "curl -X POST http://127.0.0.1:8081/upload" in _avatar_desc
+    assert "$TOKEN" in _avatar_desc
+    assert "不要直接填你机器的本地路径" in _avatar_desc
     # json/object → object
     assert props["meta"] == {"type": "object", "x-location": "body"}
     # multiple → array wrapper with single-value items

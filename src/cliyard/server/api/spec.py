@@ -20,4 +20,7 @@ router = APIRouter()
 @router.get("/spec")
 async def get_spec(request: Request) -> dict:
     """Return the command tree + flow metadata for the served spec dir."""
-    return build_command_tree(request.app.state.spec_dir)
+    upload_base = getattr(request.app.state, "upload_base", None)
+    return build_command_tree(
+        request.app.state.spec_dir, upload_base=upload_base, transport="http"
+    )

@@ -91,11 +91,20 @@ def _command_spec(
     )
 
 
-def build_tool_specs(spec_dir: str | Path) -> dict[str, ToolSpec]:
+def build_tool_specs(
+    spec_dir: str | Path,
+    *,
+    upload_base: str | None = None,
+    transport: str = "http",
+) -> dict[str, ToolSpec]:
     """把 spec 命令树 / flow 树映射为 MCP 工具表（``name -> ToolSpec``）。
 
     Args:
         spec_dir: cliyard spec 目录。
+        upload_base: 对外 ``POST /upload`` 基地址（透传给 file 参数描述
+            模板；缺省 ``None`` → 占位地址 + 一句配置提示）。
+        transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板；
+            ``"stdio"`` 追加同机 ``file_path`` 段）。
 
     Returns:
         ``{tool_name: ToolSpec}``，工具名与 /api/execute target 对齐。
@@ -103,7 +112,7 @@ def build_tool_specs(spec_dir: str | Path) -> dict[str, ToolSpec]:
     Raises:
         FileNotFoundError: spec_dir 缺 _auth.yaml 时由 build_command_tree 抛出。
     """
-    tree = build_command_tree(spec_dir)
+    tree = build_command_tree(spec_dir, upload_base=upload_base, transport=transport)
     specs: dict[str, ToolSpec] = {}
 
     groups = tree.get("groups") or []

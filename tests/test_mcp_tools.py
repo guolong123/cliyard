@@ -108,7 +108,14 @@ def test_schema_type_mapping_in_enum_and_file():
         "enum": ["a", "b"],
         "x-location": "query",
     }
-    assert props["file"] == {"type": "string", "format": "binary", "x-location": "body"}
+    assert props["file"]["type"] == "string"
+    assert props["file"]["format"] == "binary"
+    assert props["file"]["x-location"] == "body"
+    # todo 4: file 参数 description 追加 curl 上传指引（三要素）
+    _desc = props["file"]["description"]
+    assert "curl -X POST http://127.0.0.1:8081/upload" in _desc
+    assert "$TOKEN" in _desc
+    assert "不要直接填你机器的本地路径" in _desc
     assert props["tags"] == {
         "type": "array",
         "items": {"type": "string"},
