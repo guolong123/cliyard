@@ -371,7 +371,7 @@ def build_tool_specs(
             ``"stdio"`` 追加同机 ``file_path`` 段）。
         mode: ``"flat"``（缺省，与改动前逐 key 一致，每 method 一工具）或
             ``"grouped"``（每 resource 一工具，``operation`` 枚举选方法；
-            flow / ``cmd.*`` 透传不变）。
+            flow 透传，``cmd.*`` 按顶层命名空间分组）。
 
     Returns:
         ``{tool_name: ToolSpec}``，工具名与 /api/execute target 对齐。
@@ -405,8 +405,9 @@ def build_tool_specs(
         )
         _register(specs, name, spec)
 
-    # 命令级插件（@register_command）→ cmd.<command> 工具（命名空间隔离）
-    specs.update(build_plugin_tool_specs(spec_dir))
+    # 命令级插件（@register_command）→ cmd.<command> 工具（命名空间隔离；
+    # grouped 模式按顶层命名空间合并为 cmd.<ns> 分组工具）
+    specs.update(build_plugin_tool_specs(spec_dir, mode=mode))
 
     return specs
 
@@ -593,8 +594,57 @@ def _build_plugin_cli(
     return cli
 
 
+def _group_plugin_tool_specs(
+    flat_specs: dict[str, ToolSpec],
+) -> dict[str, ToolSpec]:
+    """把扁平 ``cmd.*`` 表按顶层命名空间合并为分组工具（``mode="grouped"`` 用）。
+
+    * ``cmd.pkg.info`` + ``cmd.pkg.search`` → ``cmd.pkg``（``operation`` 为
+      剩余点分路径 ``info`` / ``search`` 的枚举，释义逐操作）。
+    * 单件命名空间（``cmd.hello``）保持单工具，``operation`` 枚举单值（取自身
+      短名，直通原 ToolSpec）。
+    * 输入已由 ``_walk_plugin_commands`` 按 hidden-skip 语义过滤——隐藏命令不
+      进表，此处不做二次判断。
+    * union schema 复用 :func:`build_union_schema`（碰撞标注语义同样成立：被
+      遮蔽字段走选中 op 原 spec 的 click 解析，类型不符报 UsageError）；与
+      ``operation`` 选择器同名的业务参数同样被丢弃（todo 4 钉死的 deliberate
+      edge，分发走同一 ``grouped`` 分支，无需重复处理）。
+    """
+    buckets: dict[str, list[tuple[str, ToolSpec]]] = {}
+    for name, spec in flat_specs.items():
+        rest = name.removeprefix("cmd.")
+        ns, sep, sub = rest.partition(".")
+        op = sub if sep else rest
+        buckets.setdefault(ns, []).append((op, spec))
+    grouped: dict[str, ToolSpec] = {}
+    for ns, members in buckets.items():
+        operations = {op: spec for op, spec in members}
+        union = build_union_schema(
+            f"cmd.{ns}",
+            f"命令插件命名空间 cmd.{ns}",
+            [
+                {"name": op, "desc": spec.description, "schema": spec.input_schema}
+                for op, spec in members
+            ],
+        )
+        tool_name = f"cmd.{ns}"
+        _register(
+            grouped,
+            tool_name,
+            ToolSpec(
+                name=tool_name,
+                kind="grouped",
+                target=tool_name,  # 命名空间级 target；按 operation 转交原 ToolSpec
+                description=str(union.get("description") or tool_name),
+                input_schema=union,
+                operations=operations,
+            ),
+        )
+    return grouped
+
+
 def build_plugin_tool_specs(
-    spec_dir: str | Path, base_ctx: Any = None
+    spec_dir: str | Path, base_ctx: Any = None, mode: str = "flat"
 ) -> dict[str, ToolSpec]:
     """把命令级插件（``@register_command``）映射为 MCP 工具表。
 
@@ -602,9 +652,14 @@ def build_plugin_tool_specs(
         spec_dir: cliyard spec 目录（插件从 ``{spec_dir}/plugins/*.py`` 发现）。
         base_ctx: ServiceContext；缺省时按 spec 服务配置构建（与 executor
             一致，避免插件 builder 内依赖 ``ctx.base_url`` 等字段）。
+        mode: ``"flat"``（缺省，与改动前逐 key 一致）或 ``"grouped"``（按顶层
+            命名空间合并为 ``cmd.<ns>`` 分组工具，``operation`` 为剩余点分路径）。
 
     Returns:
         ``{tool_name: ToolSpec}``，工具名统一 ``cmd.`` 前缀。
+
+    Raises:
+        ValueError: ``mode`` 非 ``"flat"`` / ``"grouped"``。
     """
     from cliyard.server.context import build_service_context
 
@@ -624,4 +679,10 @@ def build_plugin_tool_specs(
         if cmd is None or getattr(cmd, "hidden", False):
             continue
         _walk_plugin_commands(cmd, name, specs)
-    return specs
+    if mode == "flat":
+        return specs
+    if mode != "grouped":
+        raise ValueError(
+            f"unknown MCP tool mode {mode!r} (expected 'flat' or 'grouped')"
+        )
+    return _group_plugin_tool_specs(specs)

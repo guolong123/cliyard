@@ -97,8 +97,10 @@ class MCPExecutor:
         self._tool_specs: dict[str, ToolSpec] = build_tool_specs(
             self.spec_dir, **_spec_kwargs
         )
-        # 命令级插件（@register_command）→ cmd.<command> 工具
-        self._tool_specs.update(build_plugin_tool_specs(self.spec_dir))
+        # 命令级插件（@register_command）→ cmd.<command> 工具（flat）或
+        # cmd.<ns> 分组工具（grouped；与 build_tool_specs 内合并同 mode，
+        # 否则扁平 cmd.* 会泄漏进分组表，同名单件还会覆盖掉分组工具）
+        self._tool_specs.update(build_plugin_tool_specs(self.spec_dir, mode=self.tool_mode))
         self._service: dict[str, Any] | None = None
         self._flows: list[Any] | None = None
 
