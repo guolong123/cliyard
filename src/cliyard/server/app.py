@@ -69,6 +69,10 @@ def create_app(
     spec_dir: str | os.PathLike[str],
     cors_origins: list[str] | None = None,
     token: str | None = None,
+    *,
+    upload_dir: str | None = None,
+    upload_base_url: str | None = None,
+    file_allow_dirs: tuple[str, ...] | list[str] | None = None,
 ) -> FastAPI:
     """Build the FastAPI application for a YAML spec directory.
 
@@ -110,6 +114,9 @@ def create_app(
 
     app.state.service = service
     app.state.spec_dir = str(spec_path)
+    app.state.upload_dir = upload_dir
+    app.state.upload_base = upload_base_url
+    app.state.file_allow_dirs = tuple(file_allow_dirs or ())
     # ``POST /api/upload`` 鉴权 token（None = 本地免鉴；见 verify_upload_token）。
     app.state.upload_token = token
 

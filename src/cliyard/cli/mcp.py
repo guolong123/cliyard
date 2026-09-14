@@ -31,6 +31,9 @@ def mcp(
     server: str | None,
     token: str | None,
     allow_remote_no_auth: bool,
+    upload_dir: str,
+    upload_base_url: str | None,
+    file_allow_dirs: tuple[str, ...],
 ) -> None:
     """Expose the YAML specs in SPEC_DIR as an MCP server.
 
@@ -47,4 +50,7 @@ def mcp(
         server_override=server,
         token=token,
         allow_remote_no_auth=allow_remote_no_auth,
+        upload_dir=upload_dir,
+        upload_base_url=upload_base_url,
+        file_allow_dirs=file_allow_dirs,
     )
