@@ -66,7 +66,7 @@ def test_server_launches_uvicorn_with_captured_spec_dir(monkeypatch):
     created_apps: list[str] = []
     launched: dict = {}
 
-    def fake_create_app(spec_dir):
+    def fake_create_app(spec_dir, **kwargs):
         created_apps.append(str(spec_dir))
         return object()
 
@@ -88,7 +88,7 @@ def test_server_launches_uvicorn_with_captured_spec_dir(monkeypatch):
 
 def test_server_app_build_error_exits_nonzero(monkeypatch):
     """A failing app build surfaces as a clean click error (exit != 0)."""
-    def boom(spec_dir):
+    def boom(spec_dir, **kwargs):
         raise FileNotFoundError(f"Spec directory not found: {spec_dir}")
 
     monkeypatch.setattr("cliyard.server.launcher.create_app", boom)
