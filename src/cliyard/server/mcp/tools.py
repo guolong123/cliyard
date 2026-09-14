@@ -43,10 +43,14 @@ class ToolSpec:
 
     Attributes:
         name: MCP tool name（= /api/execute target，命令场景二者一致）。
-        kind: ``"command"`` 或 ``"flow"``。
-        target: 传给执行内核的 target（resource.method 或 flow command）。
+        kind: ``"command"``、``"flow"``、``"plugin"`` 或 ``"grouped"``。
+        target: 传给执行内核的 target（resource.method 或 flow command；
+            grouped 场景为资源级工具名，不可直接执行，按 operation 转交）。
         description: 面向 LLM 的工具说明（method 描述 + HTTP 方法/路径 + 资源描述）。
         input_schema: ``params_to_json_schema`` / ``build_flow_schema`` 的 JSON Schema。
+        operations: grouped 工具的载体（``{operation -> 原 ToolSpec}``，原
+            ToolSpec 的 name 沿用扁平恒等式 ``f"{tool}.{op}"``）；非分组
+            工具恒为 ``None``。
     """
 
     name: str
@@ -54,6 +58,7 @@ class ToolSpec:
     target: str
     description: str
     input_schema: dict[str, Any] = field(default_factory=lambda: dict(_EMPTY_SCHEMA))
+    operations: dict[str, ToolSpec] | None = None
 
     def as_tool(self) -> Tool:
         """转换为 MCP :class:`~mcp.types.Tool`（tools/list 返回用）。"""
@@ -230,6 +235,10 @@ def _grouped_resource_spec(
     会发生——指引已由 schema_bridge 按本组 ``upload_base`` / ``transport``
     渲染；仅手工构造的 commands 触发），用 :func:`_file_upload_guide` 按原
     组合补齐。被碰撞遮蔽的 file 定义不补（标注已指明遮蔽，运行时走报错）。
+
+    ``operations`` 载体：每个操作一条原 ToolSpec（name 沿用扁平恒等式
+    ``f"{tool}.{op}"``，与 ``mode="flat"`` 表同名），供 executor 的 grouped
+    分支按 ``operation`` 转交原路执行。
     """
     union = build_union_schema(resource_name, resource_desc, commands)
     props = union.get("properties") or {}
@@ -248,12 +257,19 @@ def _grouped_resource_spec(
         guide = _file_upload_guide(upload_base, transport)
         existing = prop.get("description") or ""
         prop["description"] = f"{existing}\n{guide}" if existing else guide
+    operations: dict[str, ToolSpec] = {}
+    for cmd in commands:
+        op = str(cmd.get("name") or "")
+        if not op:
+            continue
+        operations[op] = _command_spec(f"{tool_name}.{op}", cmd, resource_desc, "")
     return ToolSpec(
         name=tool_name,
         kind="grouped",
         target=tool_name,  # 资源级 target；todo 4 按 operation 转交原 ToolSpec
         description=str(union.get("description") or tool_name),
         input_schema=union,
+        operations=operations,
     )
 
 
