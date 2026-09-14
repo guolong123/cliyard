@@ -66,6 +66,7 @@ class FlowContext:
     upload_dir: str | None = None
     allow_dirs: Any = None
     server_tmp_files: Any = None
+    spec_dir: str | None = None
     _flow_aborted: bool = False
     _flow_skipped: bool = False
     _current_flow: Any = None
@@ -318,6 +319,7 @@ def execute_use_step(
         upload_dir=getattr(context, "upload_dir", None),
         allow_dirs=getattr(context, "allow_dirs", None),
         server_tmp_files=getattr(context, "server_tmp_files", None),
+        spec_dir=getattr(context, "spec_dir", None),
     )
 
     # Emit a format event for the web UI when the method has output.items_path
@@ -792,6 +794,7 @@ def _execute_for_each(step, context: FlowContext) -> list:
             upload_dir=getattr(context, "upload_dir", None),
             allow_dirs=getattr(context, "allow_dirs", None),
             server_tmp_files=getattr(context, "server_tmp_files", None),
+            spec_dir=getattr(context, "spec_dir", None),
         )
 
         iter_results: dict[str, Any] = {}
@@ -1362,6 +1365,7 @@ def run_flow(
     upload_dir: str | None = None,
     allow_dirs: Any = None,
     server_tmp_files: Any = None,
+    spec_dir: str | None = None,
 ) -> None:
     """Execute a flow definition sequentially.
 
@@ -1465,6 +1469,7 @@ def run_flow(
             if server_tmp_files is not None
             else getattr(service_ctx, "server_tmp_files", None)
         ),
+        spec_dir=spec_dir,
     )
 
     # --- on_start hooks ---

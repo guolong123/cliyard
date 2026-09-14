@@ -383,6 +383,7 @@ class ExecutionManager:
                     upload_dir=self.server_upload_dir,
                     allow_dirs=self.server_allow_dirs,
                     server_tmp_files=tmp_files,
+                    spec_dir=execution.spec_dir,
                     **({"http_client": client} if client is not None else {}),
                 )
             finally:
@@ -425,6 +426,7 @@ class ExecutionManager:
                 service,
                 step_cb=lambda name, payload: self._emit(execution, name, payload),
                 console=Console(soft_wrap=True, force_terminal=False, no_color=True, file=io.StringIO()),
+                spec_dir=execution.spec_dir,
             )
             execution.status = "done"
         except Exception as exc:
