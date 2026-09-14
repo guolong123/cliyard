@@ -171,6 +171,82 @@ curl -X POST http://127.0.0.1:8080/api/execute \
 stdio 同机模式是例外：server 与 agent 同一台机器，`file` 参数直接填本地
 路径即可，无需上传（无路径校验）。
 
+## MCP (cliyard mcp)
+
+`cliyard mcp <spec-dir>` 把同一套 YAML spec 暴露为 MCP server（stdio 默认，
+`--transport http` 可选）。工具与 CLI / WebUI 共用同一执行内核，参数校验与
+执行语义逐字一致。
+
+### flat vs grouped：工具布局
+
+`--mcp-tool-mode flat|grouped`（默认 `flat`）控制 `tools/list` 的输出形状：
+
+| | flat（默认） | grouped |
+|---|---|---|
+| 工具粒度 | 一个 method 一个工具（`pet.list`、`pet.create`…） | 一个 resource 一个工具（`pet`，`operation` 枚举选方法） |
+| 工具数量 | 方法总数（ketacli 约 275；demo 29） | 资源数 + flows + 插件命名空间（ketacli 约 71；demo 9） |
+| 执行精度 | — | 与 flat 同参同结果（静态放宽、运行时收紧：缺必填 / 类型错走同一 binder，文案同字） |
+| 延迟 | — | 多一次 `operation` 查表分发，可忽略；`tools/list` 负载更小 |
+| 适用 | spec 小、工具名精确直达 | spec 大（50+ 工具）、模型 context 紧张、工具名相近易混淆 |
+
+flow（`flow.*`）两种模式都保持 1:1，不合并；`cmd.*` 插件在 grouped 下按顶层命名空间合并
+（`cmd.signal.*` → `cmd.signal`，`operation` 取剩余点分路径）。
+
+何时开 grouped：`tools/list` 返回几十上百个工具、agent 开始选错工具或 context 被挤爆时；
+只读小 spec 用默认 flat 即可。
+
+### 示例
+
+```bash
+# 默认 flat：29 个工具
+cliyard mcp examples/demo --transport http --port 8081 &
+
+# grouped：9 个工具（3 resources + 4 flows + 2 插件命名空间）
+cliyard mcp examples/demo --transport http --port 8082 --mcp-tool-mode grouped &
+```
+
+另起终端，握手后取 `tools/list` 并计数（grouped 端口）：
+
+```bash
+python3 - <<'EOF'
+import json, urllib.request
+BASE = "http://127.0.0.1:8082/mcp"
+def post(payload, sid=None):
+    req = urllib.request.Request(BASE, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json",
+                 "Accept": "application/json, text/event-stream"})
+    if sid:
+        req.add_header("mcp-session-id", sid)
+    with urllib.request.urlopen(req) as r:
+        return r.read().decode(), r.headers.get("mcp-session-id")
+body, sid = post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+               "clientInfo": {"name": "demo", "version": "1"}}})
+post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
+body, _ = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, sid)
+names = []
+for line in body.splitlines():
+    if line.startswith("data: "):
+        names = [t["name"] for t in json.loads(line[6:])["result"]["tools"]]
+print(len(names), sorted(names))
+EOF
+# => 9 ['cmd.health', 'cmd.signal', 'flow.add_user', 'flow.hook_demo',
+#       'flow.plugin_demo', 'flow.retry_demo', 'order', 'pet', 'user']
+```
+
+grouped 调用只多一个 `operation` 参数，其余与 flat 同名同义：
+
+```json
+{"name": "pet", "arguments": {"operation": "list"}}
+// 等价于 flat 下 {"name": "pet.list", "arguments": {}}
+```
+
+### 兼容声明
+
+- 默认 `flat`，不传 `--mcp-tool-mode` 的行为与之前逐字节一致（含工具名）。
+- flat 工具名稳定，不改名；grouped 为 opt-in，不改变任何 flat 表。
+- 当前无改变默认值的计划（改默认是 breaking change）。
+
 ## Examples
 
 See the [examples/](examples/) directory for ready-to-use spec sets:
