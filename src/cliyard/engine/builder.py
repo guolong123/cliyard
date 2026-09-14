@@ -873,6 +873,102 @@ def build_operation_command(
     return cmd
 
 
+def execute_plugin_method(
+    plugin_name: str,
+    kwargs: dict[str, Any],
+    method_spec: dict[str, Any],
+    service_ctx: ServiceContext,
+    http_client: Any = None,
+    base_url_override: str | None = None,
+    spec_dir: str | None = None,
+    server_mode: bool = False,
+    upload_dir: str | None = None,
+    allow_dirs: list[str] | tuple[str, ...] | str | None = None,
+    server_tmp_files: list[str] | tuple[str, ...] | set[str] | None = None,
+    event_cb: Callable[[str, dict], None] | None = None,
+) -> dict:
+    """执行 ``type: plugin:*`` 方法的结构化内核（无 click/console 依赖）。
+
+    顺序钉死：registry-check 第一 → bind → file 参数 jail（server_mode
+    下）→ merge（原 ``903-909`` 语义）→ client 解析 → ``plugin_fn`` 调用，
+    返回 raw dict 原样（不剥 ``_formatted`` marker、不打印）。
+
+    Args:
+        plugin_name: 插件方法名（``plugin:`` 前缀之后的部分）。
+        kwargs: CLI/调用方传入的原始参数。
+        method_spec: 方法 spec（含 ``params``/``config``）。
+        service_ctx: 服务上下文（base_url、auth、timeout）。
+        http_client: 预配置的 HTTP 客户端，传入则优先使用并跳过 auth 链。
+        base_url_override: 覆盖 ``service_ctx.base_url``（CLI 由 wrapper 从
+            click root-obj ``server`` 解析后传入）。
+        spec_dir: 插件发现目录（透传给 ``discover_plugins``）。
+        server_mode: ``True`` 时 file 类型参数先过服务端 jail。
+        upload_dir: jail 的上传目录根。
+        allow_dirs: jail 的额外放行目录。
+        server_tmp_files: 桥接产物路径（逐元素 bypass jail）。
+        event_cb: 预留给 ``execute_pipeline`` 插件分支的事件回调
+           （本 todo 暂不消费，仅保签名稳定供 todo 2 使用）。
+
+    Returns:
+        插件返回的 raw dict（原样）。
+
+    Raises:
+        PluginNotFoundError: 未知插件名（含插件名）。
+        CliyError: 参数校验 / jail / 插件抛出的用户侧失败。
+    """
+    from cliyard.engine.binder import bind_and_validate
+    from cliyard.client.http import HttpClient
+    from cliyard.client.auth import run_auth_chain
+    from cliyard.engine.errors import PluginNotFoundError
+    from cliyard.plugin import PluginRegistry
+    from cliyard.plugin.discovery import discover_plugins
+
+    discover_plugins(spec_dir or None)
+    plugin_fn = PluginRegistry.get_method(plugin_name)
+    if not plugin_fn:
+        raise PluginNotFoundError(plugin_name)
+
+    validated = bind_and_validate(kwargs, method_spec)
+
+    if server_mode:
+        from cliyard.server.uploads import (
+            assert_server_readable as _assert_readable,
+        )
+
+        _bypass = set(server_tmp_files or ())
+        for _location in ("argument", "path", "query", "header", "body"):
+            for _param in method_spec.get("params", {}).get(_location, []):
+                if _param.get("type") == "file" and _param["name"] in kwargs:
+                    _candidates = kwargs[_param["name"]]
+                    _candidates = (
+                        list(_candidates)
+                        if isinstance(_candidates, (tuple, list))
+                        else [_candidates]
+                    )
+                    for _candidate in _candidates:
+                        if _candidate and _candidate not in _bypass:
+                            _assert_readable(_candidate, upload_dir, allow_dirs)
+
+    merged = {"query": {}, "body": {}, "header": {}, "path": {}}
+    for loc in ("argument", "query", "body", "header"):
+        merged[loc] = getattr(validated, loc)
+    merged["path"] = getattr(validated, "path")
+    merged.update(getattr(validated, "path"))
+    merged.update(getattr(validated, "body"))
+    merged.update(getattr(validated, "argument"))
+
+    client = http_client
+    if client is None:
+        client = HttpClient(base_url_override or service_ctx.base_url, timeout=service_ctx.timeout)
+        if service_ctx.auth_spec:
+            run_auth_chain(service_ctx.auth_spec, http_client=client,
+                           pre_filled=service_ctx.pre_filled_auth)
+
+    config = method_spec.get("config", {})
+    result = plugin_fn(params=merged, http_client=client, config=config)
+    return result
+
+
 def _make_plugin_callback(
     plugin_name: str,
     method_spec: dict[str, Any],
@@ -880,46 +976,30 @@ def _make_plugin_callback(
 ) -> Callable[..., None]:
     """Create a callback that runs a registered plugin method."""
     from rich.console import Console
-    from cliyard.engine.binder import bind_and_validate
-    from cliyard.client.http import HttpClient
-    from cliyard.client.auth import run_auth_chain
-    from cliyard.engine.errors import CliyError
-    from cliyard.plugin import PluginRegistry
-    from cliyard.plugin.discovery import discover_plugins
+    from cliyard.engine.errors import CliyError, PluginNotFoundError
     import json
 
     console = Console(soft_wrap=True)
 
     @click.pass_context
     def callback(ctx: click.Context, **kwargs: Any) -> None:
-        discover_plugins()
-        plugin_fn = PluginRegistry.get_method(plugin_name)
-        if not plugin_fn:
-            console.print(f"[red]Plugin method '{plugin_name}' not found[/red]")
-            return
+        _server = (ctx.find_root().obj or {}).get("server")
 
         try:
-            validated = bind_and_validate(kwargs, method_spec)
-            merged = {"query": {}, "body": {}, "header": {}, "path": {}}
-            for loc in ("argument", "query", "body", "header"):
-                merged[loc] = getattr(validated, loc)
-            merged["path"] = getattr(validated, "path")
-            merged.update(getattr(validated, "path"))
-            merged.update(getattr(validated, "body"))
-            merged.update(getattr(validated, "argument"))
-
-            _server = (ctx.find_root().obj or {}).get("server")
-            client = HttpClient(_server or service_ctx.base_url, timeout=service_ctx.timeout)
-            if service_ctx.auth_spec:
-                run_auth_chain(service_ctx.auth_spec, http_client=client,
-                               pre_filled=service_ctx.pre_filled_auth)
-
-            config = method_spec.get("config", {})
-            result = plugin_fn(params=merged, http_client=client, config=config)
+            result = execute_plugin_method(
+                plugin_name,
+                kwargs,
+                method_spec,
+                service_ctx,
+                base_url_override=_server,
+            )
             if isinstance(result, dict) and result.get("_formatted"):
                 return  # Plugin already handled output
             console.print(json.dumps(result, indent=2, ensure_ascii=False))
 
+        except PluginNotFoundError:
+            console.print(f"[red]Plugin method '{plugin_name}' not found[/red]")
+            return
         except CliyError as e:
             console.print(f"[red]Error:[/red] {str(e).replace('[', '[[]').replace(']', '[]]')}")
         except Exception as e:
