@@ -1,7 +1,7 @@
 """``cliyard mcp`` 命令的共享 click options。
 
 ``cliyard mcp <spec-dir>``（:mod:`cliyard.cli.mcp`）与生成 CLI 的 ``mcp``
-子命令（:mod:`cliyard.runtime.mcp_command`）复用同一组 9 个 option，集中定义
+子命令（:mod:`cliyard.runtime.mcp_command`）复用同一组 10 个 option，集中定义
 避免两处重复，保证选项面与语义一致。
 
 用法（挂在 ``@click.command()`` 之下、命令函数之上）::
@@ -10,7 +10,7 @@
     @click.argument("spec_dir", ...)
     @mcp_options
     def mcp(spec_dir, transport, host, port, server, token, allow_remote_no_auth,
-            upload_dir, upload_base_url, file_allow_dirs):
+            upload_dir, upload_base_url, file_allow_dirs, mcp_tool_mode):
         ...
 """
 
@@ -81,15 +81,23 @@ _OPT_FILE_ALLOW_DIRS = click.option(
     metavar="DIR",
     help="Extra server-readable directories (repeatable)",
 )
+_OPT_MCP_TOOL_MODE = click.option(
+    "--mcp-tool-mode",
+    type=click.Choice(["flat", "grouped"]),
+    default="flat",
+    show_default=True,
+    help="MCP tool layout: flat (one tool per method) or grouped (one tool per resource)",
+)
 
 
 def _apply_options(f: Callable[..., Any]) -> Callable[..., Any]:
-    """依序应用 9 个共享 option（transport 最外层 → 帮助最先显示）。
+    """依序应用 10 个共享 option（transport 最外层 → 帮助最先显示）。
 
-    click 装饰器自外向内收集 ``__click_params__``：上传三选项最先应用
-    （最内层 → 帮助末尾），随后是既有 6 个，最后应用 transport，即
-    transport 在最外层。
+    click 装饰器自外向内收集 ``__click_params__``：新 option 最先应用
+    （最内层 → 帮助末尾），随后是上传三选项，再是既有 6 个，最后应用
+    transport，即 transport 在最外层。
     """
+    f = _OPT_MCP_TOOL_MODE(f)
     f = _OPT_FILE_ALLOW_DIRS(f)
     f = _OPT_UPLOAD_BASE_URL(f)
     f = _OPT_UPLOAD_DIR(f)

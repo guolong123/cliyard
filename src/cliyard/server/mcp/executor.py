@@ -23,6 +23,7 @@ runner 的 ``_resolve_base_url_override`` 解析链（显式参数 > ``<SERVICE>
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -66,6 +67,8 @@ class MCPExecutor:
         transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板）。
         upload_dir: 上传目录（path jail 根；``None`` → 默认上传目录）。
         file_allow_dirs: 额外可读目录（``--file-allow-dirs``，path jail 放行）。
+        tool_mode: ``"flat"``（每方法一工具，默认）或 ``"grouped"``
+            （每资源一工具；严格透传给 ``build_tool_specs``，不做值校验）。
     """
 
     def __init__(
@@ -77,6 +80,7 @@ class MCPExecutor:
         transport: str = "http",
         upload_dir: str | None = None,
         file_allow_dirs: tuple[str, ...] | list[str] | None = None,
+        tool_mode: str = "flat",
     ) -> None:
         self.spec_dir: str = str(Path(spec_dir).resolve())
         self.server_override = server_override
@@ -84,8 +88,14 @@ class MCPExecutor:
         self.transport = transport
         self.upload_dir = upload_dir
         self.file_allow_dirs: tuple[str, ...] = tuple(file_allow_dirs or ())
+        self.tool_mode = tool_mode
+        _spec_kwargs: dict[str, Any] = {"upload_base": upload_base, "transport": transport}
+        # todo 1（`build_tool_specs(mode=...)`）尚未落地时的兼容：callee 无
+        # `mode` 形参则暂存不传（`self.tool_mode` 仍可查），落地后自动透传。
+        if "mode" in inspect.signature(build_tool_specs).parameters:
+            _spec_kwargs["mode"] = tool_mode
         self._tool_specs: dict[str, ToolSpec] = build_tool_specs(
-            self.spec_dir, upload_base=upload_base, transport=transport
+            self.spec_dir, **_spec_kwargs
         )
         # 命令级插件（@register_command）→ cmd.<command> 工具
         self._tool_specs.update(build_plugin_tool_specs(self.spec_dir))

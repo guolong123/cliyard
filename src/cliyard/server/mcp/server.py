@@ -98,6 +98,7 @@ def create_mcp_server(
     transport: str = "http",
     upload_dir: str | None = None,
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
+    tool_mode: str = "flat",
 ) -> MCPServer:
     """构建 spec 对应的低层 MCP Server（工具动态注册自命令树）。
 
@@ -111,6 +112,8 @@ def create_mcp_server(
             ``run_mcp_server`` 按其已知 transport 传入）。
         upload_dir: 上传目录（path jail 根，透传 MCPExecutor）。
         file_allow_dirs: 额外可读目录（path jail 放行，透传 MCPExecutor）。
+        tool_mode: ``"flat"``（每方法一工具，默认）或 ``"grouped"``
+            （每资源一工具，透传 MCPExecutor）。
 
     Returns:
         已注册 ``tools/list`` / ``tools/call`` 的低层 :class:`MCPServer`。
@@ -122,6 +125,7 @@ def create_mcp_server(
         transport=transport,
         upload_dir=upload_dir,
         file_allow_dirs=file_allow_dirs,
+        tool_mode=tool_mode,
     )
     return executor.to_mcp_server(name=name, version=version)
 
@@ -137,6 +141,7 @@ def build_mcp_http_app(
     upload_base: str | None = None,
     upload_dir: str | None = None,
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
+    tool_mode: str = "flat",
 ):
     """构建 Streamable HTTP 的 Starlette app（独立 uvicorn 启动用）.
 
@@ -147,6 +152,8 @@ def build_mcp_http_app(
         upload_dir: 上传存储目录（写入 ``app.state.upload_dir`` 供
             ``mcp_upload_endpoint`` 消费；``None`` → handler 回退默认目录）。
         file_allow_dirs: 额外可读目录（path jail 放行，透传 MCPExecutor）。
+        tool_mode: ``"flat"``（默认）或 ``"grouped"``（透传给
+            :func:`create_mcp_server`）。
     """
     server = create_mcp_server(
         spec_dir,
@@ -155,6 +162,7 @@ def build_mcp_http_app(
         transport="http",
         upload_dir=upload_dir,
         file_allow_dirs=file_allow_dirs,
+        tool_mode=tool_mode,
     )
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
     transport_security = _transport_security_for(host)
@@ -197,6 +205,7 @@ def mount_mcp_http(
     upload_base: str | None = None,
     upload_dir: str | None = None,
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
+    tool_mode: str = "flat",
 ) -> MCPServer:
     """把 MCP Streamable HTTP 挂载进现有 FastAPI serve（同一端口/uvicorn）。
 
@@ -216,9 +225,11 @@ def mount_mcp_http(
     server = create_mcp_server(
         spec_dir,
         server_override=server_override,
+        upload_base=upload_base,
         upload_dir=upload_dir,
         file_allow_dirs=file_allow_dirs,
         transport="http",
+        tool_mode=tool_mode,
     )
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
     transport_security = _transport_security_for(host)
@@ -273,6 +284,9 @@ def run_mcp_stdio(
     *,
     server_override: str | None = None,
     upload_base: str | None = None,
+    upload_dir: str | None = None,
+    file_allow_dirs: tuple[str, ...] | list[str] | None = None,
+    tool_mode: str = "flat",
 ) -> None:
     """以 stdio transport 启动 MCP Server（阻塞直到客户端断开）。
 
@@ -283,6 +297,9 @@ def run_mcp_stdio(
         server_override=server_override,
         upload_base=upload_base,
         transport="stdio",
+        upload_dir=upload_dir,
+        file_allow_dirs=file_allow_dirs,
+        tool_mode=tool_mode,
     )
     click.echo(f"MCP (stdio) serving spec {Path(spec_dir).resolve()}", err=True)
     asyncio.run(_serve_stdio(server))
@@ -314,6 +331,7 @@ def run_mcp_server(
     upload_base_url: str | None = None,
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     version: str = "0.12.1",
+    tool_mode: str = "flat",
 ) -> None:
     """启动 MCP Server。
 
@@ -329,6 +347,7 @@ def run_mcp_server(
         upload_base_url: 对外基址（透传 ``build_mcp_http_app(upload_base=...)``
             写入 ``app.state.upload_base``，供 todo 4 模板链）。
         file_allow_dirs: 额外可读目录（todo 5 的 jail 消费，见 learnings）。
+        tool_mode: ``"flat"``（默认）或 ``"grouped"``（透传 stdio/http 双链）。
     """
     from cliyard.server.launcher import check_upload_dir
 
@@ -339,7 +358,12 @@ def run_mcp_server(
     resolved_upload_dir = check_upload_dir(upload_dir, spec_dir)
     if transport == "stdio":
         run_mcp_stdio(
-            spec_dir, server_override=server_override, upload_base=upload_base_url
+            spec_dir,
+            server_override=server_override,
+            upload_base=upload_base_url,
+            upload_dir=resolved_upload_dir,
+            file_allow_dirs=file_allow_dirs,
+            tool_mode=tool_mode,
         )
         return
 
@@ -354,6 +378,7 @@ def run_mcp_server(
         upload_base=upload_base_url,
         upload_dir=resolved_upload_dir,
         file_allow_dirs=file_allow_dirs,
+        tool_mode=tool_mode,
     )
     url = f"http://{display_host(host)}:{port}/mcp"
     click.echo(f"MCP (Streamable HTTP) serving spec {Path(spec_dir).resolve()} at {url}")

@@ -34,6 +34,7 @@ def mcp(
     upload_dir: str,
     upload_base_url: str | None,
     file_allow_dirs: tuple[str, ...],
+    mcp_tool_mode: str,
 ) -> None:
     """Expose the YAML specs in SPEC_DIR as an MCP server.
 
@@ -53,4 +54,5 @@ def mcp(
         upload_dir=upload_dir,
         upload_base_url=upload_base_url,
         file_allow_dirs=file_allow_dirs,
+        tool_mode=mcp_tool_mode,
     )
