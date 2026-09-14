@@ -99,3 +99,13 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Failure-first 实证（pre-fix，`/tmp/todo6_prefix.py`）**：三类真错 jail/expired/missing 经 `call_tool` 均已 `is_error=True` 且指引 intact（todo 5 落地时已满足）；但 except 通道仅 `_sanitize_error(str(exc), spec_dir)`——含上传目录真值的合成缺参错（`tried <up_real>/stale.txt`）原样透出，`upload real in text: True`，GAP 坐实。
 - **修复（仅 `server/mcp/executor.py`，+8/-2 行）**：顶层 `from cliyard.server.uploads import redact_upload_path`（server→server 无环：uploads 只依赖 `engine.errors` + `server.executor`）+ except 内 `_sanitize_error` → `redact_upload_path(..., self.upload_dir)` 叠加 + 一行双根注释。用户文案逐字节保留（post-fix 同错文本仅真值变 `<upload_dir>`/`<spec_dir>`）。
 - **Post-fix 证据**：同脚本 raw-path 用例 `upload real in text: False`（`<upload_dir>/stale.txt` + `<spec_dir>/repos.yaml`）；`upload_dir=None` 时 `redact_upload_path` 回退 DEFAULT 根，行为不变。`tests/test_mcp_executor.py` 13 passed；`git status` 产品树仅本文件 dirty。
+
+## 2026-09-14 — todo 9: E2E tests/test_upload_e2e.py（4 项全绿）
+
+- **Failing-first 顺序**：先单跑 negative（d）——删服务端文件后 `call_tool` 即 `is_error=True`（"文件不存在或已过期清理…请重新 POST /upload 上传"），证明 suite 能发 red 信号；再跑全文件 4 绿。产品零改动（MUST NOT）。
+- **HTTP E2E（a）**：`TestClient(build_mcp_http_app(upload_dir=...))` 真 `POST /upload`（handler 永不 mock）→ 同 `upload_dir` 的 `MCPExecutor(transport="http")` 真 `call_tool("repos.upload", {"file": path})`（经 `SimpleNamespace(name, arguments)` + `asyncio.run` 直调 async 回调，线程池内核照走）；两次文本逐字相等（identical success，不止 non-error）+ 每次调用后断言落盘仍在（no-consume-delete 铁证）+ 上游两条 record 体均含文件字节。
+- **stdio 对照（b）**：同一 jail 外路径——`transport="stdio"`（server_mode=False）成功且上游收到字节；`transport="http"`（server_mode=True）同路径 `is_error=True`（"不在允许范围内…请先 POST /upload…"），且 jail 侧上游 record 数不变（未外发）。
+- **文案扫描（c）**：`build_mcp_http_app(token=FAKE)` 配假 token（只进鉴权/state）+ `executor.list_tools` 全表 `model_dump` JSON 串零命中假值；另断言 `POST`/`/upload` 交接指引仍在（有指引、无秘密）。
+- **代理坑（LOUD，环境非产品）**：本机 `HTTP_PROXY=http://127.0.0.1:7890`（dead proxy）使 httpx 信任环境代理、回环 MockUpstream 全变 502——此前 `test_mcp_stdio_e2e` 5 败/`test_mcp_http_e2e` 3 败"基线失败"实为此因（clean-env 下 16/16 全绿，非产品回归）。本文件自带 autouse `_no_proxy` fixture（delenv 四变量 + `NO_PROXY=127.0.0.1,localhost`，文件内隔离）；验证既有 trio 时 shell 侧 `env -u HTTP_PROXY -u HTTPS_PROXY ...`（不动其他文件）。
+- **隔离约定**：每测独立 `tmp_path` upload_dir + MockUpstream  ephemeral 端口（零固定端口、零共享静态目录）；`TestClient` 直连免 lifespan（`/upload` 纯路由）；`upload_dir` 预 `mkdir`；stdio 侧用直调 executor（`transport="stdio"` 语义与子进程一致，免 spawn 开销）。
+- **验证证据**：`PYTHONPATH=src pytest tests/test_upload_e2e.py tests/test_mcp_http_e2e.py tests/test_mcp_stdio_e2e.py` 20 passed；`git status` 仅新文件 + notepad。
