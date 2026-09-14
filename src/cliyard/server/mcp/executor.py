@@ -63,6 +63,8 @@ class MCPExecutor:
             ``base_url_override`` 传入 ``build_service_context``）。
         upload_base: 对外 ``POST /upload`` 基地址（透传给 file 参数描述模板）。
         transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板）。
+        upload_dir: 上传目录（path jail 根；``None`` → 默认上传目录）。
+        file_allow_dirs: 额外可读目录（``--file-allow-dirs``，path jail 放行）。
     """
 
     def __init__(
@@ -72,11 +74,15 @@ class MCPExecutor:
         *,
         upload_base: str | None = None,
         transport: str = "http",
+        upload_dir: str | None = None,
+        file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     ) -> None:
         self.spec_dir: str = str(Path(spec_dir).resolve())
         self.server_override = server_override
         self.upload_base = upload_base
         self.transport = transport
+        self.upload_dir = upload_dir
+        self.file_allow_dirs: tuple[str, ...] = tuple(file_allow_dirs or ())
         self._tool_specs: dict[str, ToolSpec] = build_tool_specs(
             self.spec_dir, upload_base=upload_base, transport=transport
         )
@@ -131,6 +137,10 @@ class MCPExecutor:
                 resource_spec=resource,
                 service_ctx=service_ctx,
                 resource_name=resource.get("name") or target.split(".")[0],
+                server_mode=self.transport != "stdio",
+                upload_dir=self.upload_dir,
+                allow_dirs=self.file_allow_dirs,
+                server_tmp_files=tmp_files,
             )
         finally:
             execution_manager._cleanup_tmp_files(tmp_files)

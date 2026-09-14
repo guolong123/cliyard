@@ -96,6 +96,8 @@ def create_mcp_server(
     version: str = "0.12.1",
     upload_base: str | None = None,
     transport: str = "http",
+    upload_dir: str | None = None,
+    file_allow_dirs: tuple[str, ...] | list[str] | None = None,
 ) -> MCPServer:
     """构建 spec 对应的低层 MCP Server（工具动态注册自命令树）。
 
@@ -107,6 +109,8 @@ def create_mcp_server(
         upload_base: 对外 ``POST /upload`` 基地址（透传给 file 参数描述模板）。
         transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板；
             ``run_mcp_server`` 按其已知 transport 传入）。
+        upload_dir: 上传目录（path jail 根，透传 MCPExecutor）。
+        file_allow_dirs: 额外可读目录（path jail 放行，透传 MCPExecutor）。
 
     Returns:
         已注册 ``tools/list`` / ``tools/call`` 的低层 :class:`MCPServer`。
@@ -116,6 +120,8 @@ def create_mcp_server(
         server_override=server_override,
         upload_base=upload_base,
         transport=transport,
+        upload_dir=upload_dir,
+        file_allow_dirs=file_allow_dirs,
     )
     return executor.to_mcp_server(name=name, version=version)
 
@@ -130,8 +136,9 @@ def build_mcp_http_app(
     path: str = "/mcp",
     upload_base: str | None = None,
     upload_dir: str | None = None,
+    file_allow_dirs: tuple[str, ...] | list[str] | None = None,
 ):
-    """构建 Streamable HTTP 的 Starlette app（独立 uvicorn 启动用）。
+    """构建 Streamable HTTP 的 Starlette app（独立 uvicorn 启动用）.
 
     Args:
         token: 提供后启用 bearer 鉴权（``Authorization: Bearer <token>``）。
@@ -139,12 +146,15 @@ def build_mcp_http_app(
             本 todo 仅写入 ``app.state``，缺省 ``None``）。
         upload_dir: 上传存储目录（写入 ``app.state.upload_dir`` 供
             ``mcp_upload_endpoint`` 消费；``None`` → handler 回退默认目录）。
+        file_allow_dirs: 额外可读目录（path jail 放行，透传 MCPExecutor）。
     """
     server = create_mcp_server(
         spec_dir,
         server_override=server_override,
         upload_base=upload_base,
         transport="http",
+        upload_dir=upload_dir,
+        file_allow_dirs=file_allow_dirs,
     )
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
     transport_security = _transport_security_for(host)
@@ -186,6 +196,7 @@ def mount_mcp_http(
     port: int = 8081,
     upload_base: str | None = None,
     upload_dir: str | None = None,
+    file_allow_dirs: tuple[str, ...] | list[str] | None = None,
 ) -> MCPServer:
     """把 MCP Streamable HTTP 挂载进现有 FastAPI serve（同一端口/uvicorn）。
 
@@ -202,7 +213,13 @@ def mount_mcp_http(
     路由插入**最前**：`serve` 的 ``create_app`` 会用 ``StaticFiles`` 兜底挂载
     ``/``（吞掉非 GET 方法返回 405），若不插到前面会把 ``/mcp`` 的 POST 也拦掉。
     """
-    server = create_mcp_server(spec_dir, server_override=server_override)
+    server = create_mcp_server(
+        spec_dir,
+        server_override=server_override,
+        upload_dir=upload_dir,
+        file_allow_dirs=file_allow_dirs,
+        transport="http",
+    )
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
     transport_security = _transport_security_for(host)
     if transport_security is not None:
@@ -336,6 +353,7 @@ def run_mcp_server(
         path="/mcp",
         upload_base=upload_base_url,
         upload_dir=resolved_upload_dir,
+        file_allow_dirs=file_allow_dirs,
     )
     url = f"http://{display_host(host)}:{port}/mcp"
     click.echo(f"MCP (Streamable HTTP) serving spec {Path(spec_dir).resolve()} at {url}")

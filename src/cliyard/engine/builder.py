@@ -291,6 +291,10 @@ def execute_pipeline(
     raw_response: bool = False,
     base_url_override: str | None = None,
     event_cb: Callable[[str, dict], None] | None = None,
+    server_mode: bool = False,
+    upload_dir: str | None = None,
+    allow_dirs: list[str] | tuple[str, ...] | str | None = None,
+    server_tmp_files: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> dict[str, Any] | str:
     """Execute the full request pipeline and return response data.
 
@@ -306,6 +310,18 @@ def execute_pipeline(
             ``"response"``, ``"format"``.  Payloads are pre-redacted (no
             sensitive values leak).  Exceptions raised by the callback are
             swallowed and never affect pipeline execution.  Default ``None``.
+        server_mode: If ``True``, ``type: file`` values are treated as
+            server-side paths and gated by the path jail
+            (:func:`cliyard.server.uploads.assert_server_readable`) before
+            opening.  Default ``False`` (CLI behavior, byte-identical).
+        upload_dir: Upload directory root for the jail (``None`` → default
+            upload dir).  Only consumed when *server_mode* is ``True``.
+        allow_dirs: Extra server-readable directories (``--file-allow-dirs``).
+            Only consumed when *server_mode* is ``True``.
+        server_tmp_files: Bridge-generated temp paths (``_write_base64_temp_file``
+            outputs) that bypass the jail — they are post-bridge artifacts,
+            not caller-supplied paths.  Only consumed when *server_mode* is
+            ``True``.
 
     Returns:
         Parsed response data dict (``{items, total}``) by default,
@@ -346,6 +362,25 @@ def execute_pipeline(
             for _param in method_spec.get("params", {}).get(_location, []):
                 if _param.get("type") == "file" and _param["name"] in kwargs:
                     _file_path = kwargs[_param["name"]]
+                    if server_mode:
+                        # Path jail on the PRE-bridge caller value: bridge
+                        # outputs (base64→temp artifacts) bypass via
+                        # server_tmp_files; everything else must resolve
+                        # inside the upload dir or allowlist. Element-wise
+                        # for multiple:true tuple/list.
+                        from cliyard.server.uploads import (
+                            assert_server_readable as _assert_readable,
+                        )
+
+                        _bypass = set(server_tmp_files or ())
+                        _candidates = (
+                            list(_file_path)
+                            if isinstance(_file_path, (tuple, list))
+                            else [_file_path]
+                        )
+                        for _candidate in _candidates:
+                            if _candidate and _candidate not in _bypass:
+                                _assert_readable(_candidate, upload_dir, allow_dirs)
                     if isinstance(_file_path, (tuple, list)):
                         _file_path = _file_path[0]
                     if _file_path:
@@ -420,6 +455,10 @@ def execute_pipeline(
         merged_params,
         base_url=base_url_override or service_ctx.base_url,
         prefix=service_ctx.prefix,
+        server_mode=server_mode,
+        upload_dir=upload_dir,
+        allow_dirs=allow_dirs,
+        server_tmp_files=server_tmp_files,
     )
 
     _emit_event(

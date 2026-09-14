@@ -206,6 +206,11 @@ class ExecutionManager:
         self._lock = threading.Lock()
         self._history_store = history_store
         self._history_lock = threading.Lock()
+        # Server-side file jail roots (todo 5): synced from app.state by
+        # create_app; None/() → default upload dir only. Read by
+        # _run_command (background thread, no app access).
+        self.server_upload_dir: str | None = None
+        self.server_allow_dirs: tuple[str, ...] = ()
 
     @property
     def history_store(self) -> HistoryStore:
@@ -371,6 +376,10 @@ class ExecutionManager:
                     service_ctx=service_ctx,
                     resource_name=resource.get("name") or target.split(".")[0],
                     event_cb=lambda name, payload: self._emit(execution, name, payload),
+                    server_mode=True,
+                    upload_dir=self.server_upload_dir,
+                    allow_dirs=self.server_allow_dirs,
+                    server_tmp_files=tmp_files,
                     **({"http_client": client} if client is not None else {}),
                 )
             finally:
@@ -555,6 +564,8 @@ class ExecutionManager:
                     continue
                 if isinstance(value, (tuple, list)):
                     value = value[0]
+                if isinstance(value, str) and os.path.exists(value):
+                    continue
                 path = _write_base64_temp_file(value)
                 if path is not None:
                     bridged[name] = path
