@@ -94,6 +94,8 @@ def create_mcp_server(
     server_override: str | None = None,
     name: str | None = None,
     version: str = "0.12.1",
+    upload_base: str | None = None,
+    transport: str = "http",
 ) -> MCPServer:
     """构建 spec 对应的低层 MCP Server（工具动态注册自命令树）。
 
@@ -102,11 +104,19 @@ def create_mcp_server(
         server_override: 可选 base_url 运行时覆盖（同 CLI ``--server``）。
         name: serverInfo 名称覆盖（缺省取 spec name）。
         version: serverInfo 版本。
+        upload_base: 对外 ``POST /upload`` 基地址（透传给 file 参数描述模板）。
+        transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板；
+            ``run_mcp_server`` 按其已知 transport 传入）。
 
     Returns:
         已注册 ``tools/list`` / ``tools/call`` 的低层 :class:`MCPServer`。
     """
-    executor = MCPExecutor(spec_dir, server_override=server_override)
+    executor = MCPExecutor(
+        spec_dir,
+        server_override=server_override,
+        upload_base=upload_base,
+        transport=transport,
+    )
     return executor.to_mcp_server(name=name, version=version)
 
 
@@ -130,7 +140,12 @@ def build_mcp_http_app(
         upload_dir: 上传存储目录（写入 ``app.state.upload_dir`` 供
             ``mcp_upload_endpoint`` 消费；``None`` → handler 回退默认目录）。
     """
-    server = create_mcp_server(spec_dir, server_override=server_override)
+    server = create_mcp_server(
+        spec_dir,
+        server_override=server_override,
+        upload_base=upload_base,
+        transport="http",
+    )
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
     transport_security = _transport_security_for(host)
     if transport_security is not None:
@@ -236,12 +251,22 @@ async def _serve_stdio(server: MCPServer) -> None:
         )
 
 
-def run_mcp_stdio(spec_dir: str | Path, *, server_override: str | None = None) -> None:
+def run_mcp_stdio(
+    spec_dir: str | Path,
+    *,
+    server_override: str | None = None,
+    upload_base: str | None = None,
+) -> None:
     """以 stdio transport 启动 MCP Server（阻塞直到客户端断开）。
 
     所有日志/提示输出到 stderr，保持 stdout 仅供 JSON-RPC。
     """
-    server = create_mcp_server(spec_dir, server_override=server_override)
+    server = create_mcp_server(
+        spec_dir,
+        server_override=server_override,
+        upload_base=upload_base,
+        transport="stdio",
+    )
     click.echo(f"MCP (stdio) serving spec {Path(spec_dir).resolve()}", err=True)
     asyncio.run(_serve_stdio(server))
 
@@ -296,7 +321,9 @@ def run_mcp_server(
         )
     resolved_upload_dir = check_upload_dir(upload_dir, spec_dir)
     if transport == "stdio":
-        run_mcp_stdio(spec_dir, server_override=server_override)
+        run_mcp_stdio(
+            spec_dir, server_override=server_override, upload_base=upload_base_url
+        )
         return
 
     _check_http_auth(host, token, allow_remote_no_auth)

@@ -61,16 +61,25 @@ class MCPExecutor:
         spec_dir: cliyard spec 目录。
         server_override: 可选的 base_url 运行时覆盖（同 CLI ``--server``，作为
             ``base_url_override`` 传入 ``build_service_context``）。
+        upload_base: 对外 ``POST /upload`` 基地址（透传给 file 参数描述模板）。
+        transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板）。
     """
 
     def __init__(
         self,
         spec_dir: str | Path,
         server_override: str | None = None,
+        *,
+        upload_base: str | None = None,
+        transport: str = "http",
     ) -> None:
         self.spec_dir: str = str(Path(spec_dir).resolve())
         self.server_override = server_override
-        self._tool_specs: dict[str, ToolSpec] = build_tool_specs(self.spec_dir)
+        self.upload_base = upload_base
+        self.transport = transport
+        self._tool_specs: dict[str, ToolSpec] = build_tool_specs(
+            self.spec_dir, upload_base=upload_base, transport=transport
+        )
         # 命令级插件（@register_command）→ cmd.<command> 工具
         self._tool_specs.update(build_plugin_tool_specs(self.spec_dir))
         self._service: dict[str, Any] | None = None
