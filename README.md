@@ -101,6 +101,7 @@ cd webui && npm install && npm run build
 | DELETE | `/api/executions` | 清空历史 |
 | GET | `/api/auth/profiles` | 凭据 profile 列表（token 掩码） |
 | POST | `/api/auth/switch` | 切换当前 profile |
+| POST | `/api/upload`（serve）/ `/upload`（MCP） | 文件交接点：multipart `file` 字段上传，返回 server 绝对路径 |
 
 ### 示例
 
@@ -120,6 +121,55 @@ curl -N http://127.0.0.1:8080/api/executions/<id>/stream
 # 查看历史
 curl http://127.0.0.1:8080/api/executions
 ```
+
+### 文件参数（MCP）
+
+MCP 的 tool call 通道传不了 client 本地文件，所以 `type: file` 参数走一次
+HTTP 交接：**有 shell 的 agent 先 `POST .../upload`（一条 curl）拿到 server
+绝对路径，再把该路径填进业务工具的 `file` 参数照常调用**。后续执行链路除
+服务端路径校验外零改动。
+
+```bash
+# 1. 上传文件，拿 server 绝对路径（serve 侧是 /api/upload，MCP 直连是 /upload）
+curl -X POST http://127.0.0.1:8080/api/upload \
+  -F "file=@report.pdf"
+# => {"path":".../cliyard-upload-<8hex>-report.pdf","file_name":"...","bytes":12345,"expires_at":"..."}
+
+# 远端（非本地）服务需带 token；本地回环无 token 时免鉴
+curl -X POST http://127.0.0.1:8080/api/upload \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@report.pdf"
+
+# 2. 把返回的 path 填进业务工具的 file 参数，照常调用
+curl -X POST http://127.0.0.1:8080/api/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"kind":"command","target":"repos.upload","params":{"file":"<path>"}}'
+# => {"execution_id":"..."}
+
+# 3. 同一 path 在保留期内可重放（不消费删除）；过期/被清理后调业务工具会
+#    返回可用错误（请重新 POST /upload 上传），按第 1 步重传即可
+```
+
+默认值（v1 为代码常量，不做 CLI 旗标）：保留期 TTL **30 分钟**、配额
+**500MB / 1000 个**（超限 oldest-first 淘汰）、单文件上限 **10MB**（超限 413）。
+
+相关选项（`cliyard serve` 与 `cliyard mcp` 一致）：
+
+| 选项 | 默认值 | 说明 |
+|---|---|---|
+| `--upload-dir` | `<tmp>/cliyard-uploads` | 服务端交接存储目录（危险目录启动即拒绝） |
+| `--upload-base-url` | `http://<host>:<port>` | 对外地址（缺省从监听地址推导，`0.0.0.0` 回退 `127.0.0.1`） |
+| `--file-allow-dirs` | 空（可重复） | 上传目录之外的额外服务端可读目录 |
+
+`serve` 另有 `--token`（与 MCP `--token` 同语义：绑定非本地地址时强制，
+`/api/upload` 无 token 或错 token 返回 401）。
+
+适用边界：**仅适用于有 shell 的 agent**（能执行 curl 的 MCP host）。
+无 shell 的纯聊天 host 无法传递本地文件——暂不支持（调用会返回可执行
+的上传指引而非静默失败）；`source_url` 服务端拉取为后续项。
+
+stdio 同机模式是例外：server 与 agent 同一台机器，`file` 参数直接填本地
+路径即可，无需上传（无路径校验）。
 
 ## Examples
 
