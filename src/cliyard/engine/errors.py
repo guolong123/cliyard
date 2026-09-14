@@ -44,3 +44,11 @@ class SpecError(CliyError):
         self.path = path
         self.message = message
         super().__init__(f"{file}:{path}: {message}")
+
+
+class PluginNotFoundError(CliyError):
+    """Unknown plugin method name."""
+
+    def __init__(self, plugin_name: str) -> None:
+        self.plugin_name = plugin_name
+        super().__init__(f"Plugin method '{plugin_name}' not found")
