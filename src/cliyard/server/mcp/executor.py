@@ -313,11 +313,32 @@ class MCPExecutor:
         return out or err or f"(no output from {spec.target})"
 
     def execute_spec(self, spec: ToolSpec, arguments: dict[str, Any]) -> Any:
-        """按 ToolSpec 分派执行（command / flow / plugin）。"""
+        """按 ToolSpec 分派执行（command / flow / plugin / grouped）。"""
         if spec.kind == "flow":
             return self.execute_flow(spec.target, arguments)
         if spec.kind == "plugin":
             return self.execute_plugin_command(spec, arguments)
+        if spec.kind == "grouped":
+            args = dict(arguments or {})
+            # Deliberate edge：名为 `operation` 的业务参数无法穿透分组工具——
+            # `operation` 在此被剥离为操作选择器（union schema 构造时同名业务
+            # 参数已被丢弃，见 tools.build_union_schema）；不做绕行处理。
+            op = args.pop("operation", None)
+            ops = spec.operations or {}
+            legal = sorted(ops)
+            if op is None:
+                raise ValueError(
+                    f"Tool {spec.name!r} requires 'operation'; "
+                    f"usage: {spec.name} operation=<{'|'.join(legal)}> ...; "
+                    f"available operations: {', '.join(legal)}"
+                )
+            original = ops.get(str(op))
+            if original is None:
+                raise ValueError(
+                    f"Unknown operation {str(op)!r} for tool {spec.name!r}; "
+                    f"available operations: {', '.join(legal)}"
+                )
+            return self.execute_spec(original, args)
         return self.execute_command(spec.target, arguments)
 
     # ------------------------------------------------------------------
