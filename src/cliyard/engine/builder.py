@@ -388,6 +388,7 @@ def execute_pipeline(
             allow_dirs=allow_dirs,
             server_tmp_files=server_tmp_files,
             event_cb=event_cb,
+            contain_sysexit=True,
         )
         _preview = redact_sensitive(_plugin_result)
         _emit_event(
@@ -929,6 +930,7 @@ def execute_plugin_method(
     allow_dirs: list[str] | tuple[str, ...] | str | None = None,
     server_tmp_files: list[str] | tuple[str, ...] | set[str] | None = None,
     event_cb: Callable[[str, dict], None] | None = None,
+    contain_sysexit: bool = False,
 ) -> dict:
     """执行 ``type: plugin:*`` 方法的结构化内核（无 click/console 依赖）。
 
@@ -951,18 +953,21 @@ def execute_plugin_method(
         server_tmp_files: 桥接产物路径（逐元素 bypass jail）。
         event_cb: 预留给 ``execute_pipeline`` 插件分支的事件回调
            （本 todo 暂不消费，仅保签名稳定供 todo 2 使用）。
+        contain_sysexit: ``True`` 时插件抛出的 ``SystemExit`` 被收敛为
+            ``CliyError``（server/MCP 路径）；``False``（缺省，CLI 路径）
+            保持今日行为（``SystemExit`` 原样穿透）。
 
     Returns:
         插件返回的 raw dict（原样）。
 
     Raises:
         PluginNotFoundError: 未知插件名（含插件名）。
-        CliyError: 参数校验 / jail / 插件抛出的用户侧失败。
+        CliyError: 参数校验 / jail / 插件抛出的用户侧失败 / 插件非零退出。
     """
     from cliyard.engine.binder import bind_and_validate
     from cliyard.client.http import HttpClient
     from cliyard.client.auth import run_auth_chain
-    from cliyard.engine.errors import PluginNotFoundError
+    from cliyard.engine.errors import CliyError, PluginNotFoundError
     from cliyard.plugin import PluginRegistry
     from cliyard.plugin.discovery import discover_plugins
 
@@ -1008,6 +1013,15 @@ def execute_plugin_method(
                            pre_filled=service_ctx.pre_filled_auth)
 
     config = method_spec.get("config", {})
+    if contain_sysexit:
+        try:
+            result = plugin_fn(params=merged, http_client=client, config=config)
+        except SystemExit as e:
+            code = e.code
+            if code is None or code == 0:
+                return {}
+            raise CliyError(f"Plugin '{plugin_name}' exited with code {code!r}")
+        return result
     result = plugin_fn(params=merged, http_client=client, config=config)
     return result
 
