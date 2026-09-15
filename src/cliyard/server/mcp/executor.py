@@ -234,6 +234,7 @@ class MCPExecutor:
 
         import click
 
+        from cliyard.engine.errors import CliyError
         from cliyard.engine.loader import load_service
         from cliyard.server.context import build_service_context
         from cliyard.server.mcp.tools import _build_plugin_cli
@@ -303,6 +304,14 @@ class MCPExecutor:
                         prog_name=f"cliyard {spec.target}",
                         standalone_mode=False,
                     )
+                except SystemExit as e:
+                    code = e.code
+                    if code is None or code == 0:
+                        pass  # 命令内 sys.exit(0)/sys.exit(None) — 正常退出
+                    else:
+                        raise CliyError(
+                            f"Plugin command '{spec.target}' exited with code {code!r}"
+                        )
                 except click.exceptions.Exit:
                     pass  # 命令内 sys.exit(0) — 正常退出
         except click.UsageError:
