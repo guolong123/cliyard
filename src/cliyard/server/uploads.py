@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import stat
 import tempfile
 import time
 from datetime import datetime
@@ -63,6 +64,53 @@ def _resolve_dir(upload_dir: str | os.PathLike[str] | None) -> str:
     """上传目录解析为绝对路径（realpath，不跟随不存在路径抛错）。"""
     base = str(upload_dir) if upload_dir else DEFAULT_UPLOAD_DIR
     return os.path.realpath(os.path.abspath(os.path.expanduser(base)))
+
+
+class _NormalizedBypassSet(set):
+    """realpath 归一化后的 bypass 集合（成员判定同样归一化）。
+
+    桥接产物路径（``server.executor._write_base64_temp_file``）恒为绝对路径，
+    但调用方回传的候选值可能带 ``./`` / ``../`` / ``/tmp``→``/private/tmp``
+    等非规范形式；字符串 ``in`` 比较会误判为 jail 越狱。继承 ``set`` 仅为
+    复用集合语义，``__contains__`` 对候选值做同样的
+    ``realpath(abspath(expanduser()))`` 归一化后再判定，调用方
+    ``_candidate not in _bypass`` 一行无需改动。归一化失败（非法值）一律
+    判为不在集合内（fail-closed，走正常 jail 断言）。
+    """
+
+    def __contains__(self, item: object) -> bool:
+        try:
+            if not item:
+                return False
+            norm = os.path.realpath(
+                os.path.abspath(os.path.expanduser(str(item)))
+            )
+        except Exception:
+            return False
+        return super().__contains__(norm)
+
+
+def normalize_bypass(
+    paths: list[str] | tuple[str, ...] | set[str] | None,
+) -> set[str]:
+    """把桥接产物路径归一化为 bypass 集合（``server_tmp_files`` 专用）。
+
+    每个元素做 ``realpath(abspath(expanduser()))`` 归一化；空值 / 归一化
+    失败项直接丢弃（永不抛错）。返回的集合成员判定同样归一化，故调用方
+    只需把 ``_bypass = set(server_tmp_files or ())`` 换成
+    ``_bypass = normalize_bypass(server_tmp_files)`` 一行。
+    """
+    normed: set[str] = set()
+    for raw in paths or ():
+        try:
+            if not raw:
+                continue
+            normed.add(
+                os.path.realpath(os.path.abspath(os.path.expanduser(str(raw))))
+            )
+        except Exception:
+            continue
+    return _NormalizedBypassSet(normed)
 
 
 def _now_iso() -> str:
@@ -173,9 +221,9 @@ def sweep(
     * 先删过期项（``now - mtime > UPLOAD_TTL_S``）；
     * 再按配额（个数 / 总字节）mtime 最老优先淘汰。
 
-    删除按名 unlink，unlink 前 realpath 复核仍在目录内（防 TOCTOU
-    symlink 替换）；清理失败记 ``logger.warning``，永不抛错（搭车执行
-    不得影响主链路）。
+    删除按 dir_fd unlink（父目录 O_DIRECTORY pin 住 + O_NOFOLLOW open +
+    fstat 确认常规文件同设备，防 TOCTOU symlink 替换）；清理失败记
+    ``logger.debug``，永不抛错（搭车执行不得影响主链路）。
     """
     resolved_dir = _resolve_dir(upload_dir)
     moment = now if now is not None else time.time()
@@ -207,32 +255,77 @@ def sweep(
             logger.debug("upload sweep 跳过外来文件 %s", entry.name)
             continue  # 外来文件：纹丝不动
         try:
-            stat = entry.stat(follow_symlinks=False)
+            entry_st = entry.stat(follow_symlinks=False)
         except OSError as exc:
             logger.debug("upload sweep 跳过不可 stat 项 %s: %s", entry.name, exc)
             continue
-        managed.append((stat.st_mtime, stat.st_size, entry.name))
+        managed.append((entry_st.st_mtime, entry_st.st_size, entry.name))
 
     removed = 0
     freed_bytes = 0
 
     def _unlink(name: str) -> int:
-        """按名删除（realpath 复核仍在目录内），返回释放字节数（失败 -1）。"""
+        """竞态安全删除（dir_fd + O_NOFOLLOW + fstat 门控），返回释放字节数（失败 -1）。
+
+        父目录以 ``O_DIRECTORY`` 打开 pin 住（``dir_fd`` 保证 unlink 目标恒在
+        该目录内，无路径穿越）；候选经 ``O_NOFOLLOW`` 打开（symlink 直接
+        ``ELOOP`` 跳过，永不跟随）；``fstat`` 确认 regular file 且与目录同
+        ``st_dev`` 后，才 ``os.unlink(name, dir_fd=parent_fd)``（unlink 永不
+        跟随末段 symlink）。任何异常一律跳过 + ``logger.debug``，永不抛错。
+        """
         nonlocal removed
-        candidate = os.path.join(resolved_dir, name)
-        try:
-            real = os.path.realpath(candidate)
-            if os.path.dirname(real) != resolved_dir:
-                return -1
-            if os.path.islink(candidate) or not os.path.isfile(candidate):
-                return -1
-            size = os.path.getsize(candidate)
-            os.unlink(candidate)
-            removed += 1
-            return size
-        except OSError as exc:
-            logger.warning("upload sweep 删除失败 %s: %s", name, exc)
+        # 纵深防御：scandir 名字恒为单段；含分隔符的名字直接拒掉。
+        if not name or "/" in name or name != os.path.basename(name):
+            logger.debug("upload sweep 跳过非法名 %r", name)
             return -1
+        try:
+            parent_fd = os.open(resolved_dir, os.O_RDONLY | os.O_DIRECTORY)
+        except OSError as exc:
+            logger.debug("upload sweep 打开目录失败 %s: %s", resolved_dir, exc)
+            return -1
+        try:
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            except OSError as exc:
+                # symlink（ELOOP）/ 已消失 / 无权限：统统跳过。
+                logger.debug("upload sweep 跳过不可 open 项 %s: %s", name, exc)
+                return -1
+            try:
+                try:
+                    st = os.fstat(fd)
+                except OSError as exc:
+                    logger.debug("upload sweep 跳过不可 fstat 项 %s: %s", name, exc)
+                    return -1
+                if not stat.S_ISREG(st.st_mode):
+                    logger.debug("upload sweep 跳过非常规文件 %s", name)
+                    return -1
+                try:
+                    dir_st = os.fstat(parent_fd)
+                except OSError as exc:
+                    logger.debug("upload sweep 目录 fstat 失败 %s: %s", name, exc)
+                    return -1
+                if st.st_dev != dir_st.st_dev:
+                    logger.debug("upload sweep 跳过异设备项 %s", name)
+                    return -1
+                size = st.st_size
+                try:
+                    os.unlink(name, dir_fd=parent_fd)
+                except OSError as exc:
+                    logger.debug("upload sweep 删除失败 %s: %s", name, exc)
+                    return -1
+                removed += 1
+                return size
+            finally:
+                try:
+                    os.close(fd)
+                except OSError as exc:
+                    logger.debug("upload sweep 关闭 fd 失败 %s: %s", name, exc)
+        finally:
+            try:
+                os.close(parent_fd)
+            except OSError as exc:
+                logger.debug("upload sweep 关闭目录 fd 失败 %s: %s", name, exc)
+        return -1
 
     survivors: list[tuple[float, int, str]] = []
     for mtime, size, name in managed:
@@ -425,5 +518,6 @@ __all__ = [
     "validate_dir",
     "is_managed",
     "assert_server_readable",
+    "normalize_bypass",
     "redact_upload_path",
 ]

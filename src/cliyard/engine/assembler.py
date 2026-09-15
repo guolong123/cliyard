@@ -315,9 +315,10 @@ def assemble_request(
             if server_mode:
                 from cliyard.server.uploads import (
                     assert_server_readable as _assert_readable,
+                    normalize_bypass as _normalize_bypass,
                 )
 
-                _bypass = set(server_tmp_files or ())
+                _bypass = _normalize_bypass(server_tmp_files)
                 _candidates = (
                     list(file_path)
                     if isinstance(file_path, (tuple, list))
