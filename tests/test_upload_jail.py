@@ -235,3 +235,54 @@ def test_pipeline_and_sweep_never_delete_inputs(make_dir) -> None:
     assert os.path.isfile(allowed)
     with open(allowed, "rb") as f:
         assert f.read() == b"caller input stays"
+
+
+def test_bypass_accepts_dot_slash_variant(make_dir) -> None:
+    """Non-normalized variant of a bridged temp path passes the bypass (no false jail)."""
+    from cliyard.server.uploads import normalize_bypass
+
+    upload_dir = make_dir()
+    bridge_dir = make_dir()
+    bridged = _write(
+        os.path.join(bridge_dir, "cliyard-upload-abc12345-bridge.bin"),
+        b"bridge bytes",
+    )
+    variant = "./" + os.path.relpath(bridged)
+    assert variant != bridged
+    assert os.path.realpath(variant) == os.path.realpath(bridged)
+    # The old string-compare misses it (the PR-review false-jail finding)...
+    assert variant not in set([bridged])
+    # ...the normalized bypass accepts it, in both spellings.
+    assert variant in normalize_bypass([bridged])
+    assert bridged in normalize_bypass([bridged])
+    # Fail-closed: unknown paths still miss; empty/None inputs never raise.
+    assert "no-such-file-anywhere" not in normalize_bypass([bridged])
+    assert normalize_bypass(None) == set()
+    assert normalize_bypass([]) == set()
+    assert normalize_bypass(["", None]) == set()
+
+
+def test_pipeline_bypass_accepts_dot_slash_variant(make_dir) -> None:
+    """End-to-end: a ./-variant of a bridge output flows through server_mode."""
+    upload_dir = make_dir()
+    bridge_dir = make_dir()
+    bridged = _write(
+        os.path.join(bridge_dir, "cliyard-upload-abc12345-bridge.bin"),
+        b"bridge pipeline bytes",
+    )
+    variant = "./" + os.path.relpath(bridged)
+
+    client = _FakeHttpClient()
+    result = execute_pipeline(
+        {"doc": variant},
+        _file_method_spec(),
+        {"path": "items"},
+        ServiceContext(base_url="http://127.0.0.1:1"),
+        resource_name="items",
+        http_client=client,
+        raw_response=True,
+        server_mode=True,
+        upload_dir=upload_dir,
+        server_tmp_files=[bridged],
+    )
+    assert result == {}

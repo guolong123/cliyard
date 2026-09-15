@@ -257,3 +257,53 @@ def test_sweep_prefix_gate_only(make_dir) -> None:
     assert result["removed"] == 1
     assert os.path.isfile(lookalike)
     assert not os.path.exists(managed["path"])
+
+
+def test_sweep_prefix_symlink_survives_race(make_dir, monkeypatch) -> None:
+    """Prefix-named symlink + mid-sweep TOCTOU swap: outside target never harmed.
+
+    Covers the PR-review TOCTOU finding on the sweep deletion path: a managed
+    regular file swapped for an outside-pointing symlink between scan and
+    unlink must not cause any outside delete (``O_NOFOLLOW`` + ``dir_fd``
+    unlink never follows the final component); the pre-existing prefix-named
+    symlink is skipped by the scan and survives byte-identical.
+    """
+    upload_dir = make_dir()
+    outside_dir = make_dir()
+    now = time.time()
+    old = now - UPLOAD_TTL_S - 300
+
+    secret = os.path.join(outside_dir, "race-secret.txt")
+    secret_bytes = b"race-secret-must-survive-4d2e"
+    with open(secret, "wb") as f:
+        f.write(secret_bytes)
+
+    # 1. Prefix-named symlink already sitting in the dir (aged past TTL).
+    link_name = f"{UPLOAD_FILENAME_PREFIX}deadbeef-raced.txt"
+    link_path = os.path.join(upload_dir, link_name)
+    os.symlink(secret, link_path)
+
+    # 2. Real expired managed file; a racer swaps it for an outside symlink
+    #    inside os.unlink (i.e. between _unlink's checks and the delete).
+    victim = save_upload("victim.txt", b"victim bytes", upload_dir)
+    os.utime(victim["path"], (old, old))
+
+    real_unlink = os.unlink
+    swapped = {"done": False}
+
+    def _racy_unlink(path, *, dir_fd=None):
+        if dir_fd is not None and not swapped["done"]:
+            swapped["done"] = True
+            real_unlink(victim["path"])
+            os.symlink(secret, victim["path"])
+        return real_unlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "unlink", _racy_unlink)
+    result = sweep(upload_dir, now=now)
+
+    assert swapped["done"], "race hook must have fired"
+    with open(secret, "rb") as f:
+        assert f.read() == secret_bytes
+    assert os.path.islink(link_path), "prefix symlink must survive sweep"
+    assert os.readlink(link_path) == secret
+    assert result["removed"] >= 1

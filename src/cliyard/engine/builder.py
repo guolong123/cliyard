@@ -422,9 +422,10 @@ def execute_pipeline(
                         # for multiple:true tuple/list.
                         from cliyard.server.uploads import (
                             assert_server_readable as _assert_readable,
+                            normalize_bypass as _normalize_bypass,
                         )
 
-                        _bypass = set(server_tmp_files or ())
+                        _bypass = _normalize_bypass(server_tmp_files)
                         _candidates = (
                             list(_file_path)
                             if isinstance(_file_path, (tuple, list))
@@ -981,9 +982,10 @@ def execute_plugin_method(
     if server_mode:
         from cliyard.server.uploads import (
             assert_server_readable as _assert_readable,
+            normalize_bypass as _normalize_bypass,
         )
 
-        _bypass = set(server_tmp_files or ())
+        _bypass = _normalize_bypass(server_tmp_files)
         for _location in ("argument", "path", "query", "header", "body"):
             for _param in method_spec.get("params", {}).get(_location, []):
                 if _param.get("type") == "file" and _param["name"] in kwargs:
