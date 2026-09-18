@@ -32,7 +32,14 @@ _LOCATIONS = ("argument", "path", "query", "header", "body")
 
 
 def _norm_param_name(name: str) -> str:
-    """Normalize a param name for loose matching: lowercase, '-' == '_'."""
+    """Normalize a param name for loose matching: lowercase, '-' == '_', camelCase -> snake_case.
+
+    This matches Click's option naming convention where ``--page-no`` becomes the kwarg ``page_no``.
+    """
+    import re
+    # Convert camelCase to snake_case: pageNo -> page_no, pageSize -> page_size
+    name = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
+    # Then lowercase and normalize hyphens to underscores
     return name.lower().replace("-", "_")
 
 
