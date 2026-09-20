@@ -199,6 +199,9 @@ class CaseSpec:
         params: Default input params for the flow.
         data: Optional multi-row parameterization; each row merges with params.
         assert_: List of assertions to evaluate against flow step results.
+        expected_return: When True, a flow that early-returns (outcome
+            ``"returned"``, e.g. an expected permission denial) still counts
+            as PASS provided all explicit assertions pass.
     """
 
     name: str

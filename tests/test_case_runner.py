@@ -133,3 +133,22 @@ def test_multiple_data_rows_first_fails_then_all_report(monkeypatch):
     assert result["pass_count"] == 2
     assert result["fail_count"] == 1
     assert result["all_pass"] is False
+
+
+def test_run_case_forwards_spec_dir_to_run_flow(monkeypatch):
+    """run_case must pass spec_dir through so file params resolve like flow runs."""
+    captured: dict = {}
+
+    def fake_run_flow(flow_spec, flow_params, service_ctx, service_spec, **kwargs):
+        captured.update(kwargs)
+        return FakeFlowCtx(outcome="completed", step_state={}, step_meta={})
+
+    monkeypatch.setattr("cliyard.engine.case_runner.run_flow", fake_run_flow)
+    monkeypatch.setattr(
+        "cliyard.engine.case_runner.load_flows",
+        lambda spec_dir: [FakeFlowSpec("demo-flow")],
+    )
+
+    run(CaseSpec(name="tc_forward", flow="demo-flow", params={}, assert_=[]))
+
+    assert captured.get("spec_dir") == "/tmp/specs"

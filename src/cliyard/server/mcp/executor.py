@@ -34,7 +34,7 @@ from mcp.server.lowlevel import Server as MCPServer
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 
 from cliyard.engine.builder import ServiceContext, execute_pipeline
-from cliyard.engine.loader import load_flows, load_service
+from cliyard.engine.loader import load_cases, load_flows, load_service
 from cliyard.engine.orchestrator import _lookup_resource_method, run_flow
 from cliyard.server.context import build_service_context
 from cliyard.server.executor import _sanitize_error, execution_manager
@@ -341,6 +341,12 @@ class MCPExecutor:
             service,
             base_url_override=self.server_override,
         )
+        # 与 execute_flow 一致的 jail 语义：stdio 同机免检，HTTP 强制 jail。
+        # 否则 case 内 flow 的 file 参数会绕过 path jail（params 可由调用方覆盖）。
+        if isinstance(service_ctx, ServiceContext):
+            service_ctx.server_mode = self.transport != "stdio"
+            service_ctx.upload_dir = self.upload_dir
+            service_ctx.allow_dirs = self.file_allow_dirs
         result = run_case(
             case_spec, self.spec_dir, service_ctx, service, params_override=params
         )

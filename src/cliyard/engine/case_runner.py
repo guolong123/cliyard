@@ -9,6 +9,9 @@ from cliyard.engine.flow import CaseSpec
 from cliyard.engine.loader import load_flows
 from cliyard.engine.orchestrator import run_flow
 
+#: 业务成功码（``msg`` 只有在 ``code`` 非成功码时才被视为错误文案）。
+_SUCCESS_CODES = {"", "0", "200", "success", "ok"}
+
 
 def _report_row(case: CaseSpec, data_row: int | None, flow_ctx) -> dict:
     """Build one report row for a single flow run (one data row or single)."""
@@ -27,18 +30,18 @@ def _report_row(case: CaseSpec, data_row: int | None, flow_ctx) -> dict:
         "name": meta.get("use") or display_step_id or "",
         "http_method": meta.get("http_method", ""),
         "http_path": meta.get("http_path", ""),
-        "assertions_passed": None,
         "all_pass": flow_ctx.outcome == "completed",
         "elapsed": 0.0,
-        "flow_errors": None,
     }
 
 
 def _collect_flow_errors(flow_ctx) -> list[str]:
     """Collect error messages from step results when the flow did not complete.
 
-    Traverses step_state looking for 'error', 'msg' (non-empty, non-"success"),
-    and 'issues' (from custom verify steps) fields.
+    Traverses step_state looking for explicit failure signals only: an
+    ``error`` field, a business ``msg`` **paired with a failing ``code``**
+    (so a success body whose msg is e.g. "查询成功" is not misreported), and
+    ``issues`` (from custom verify steps).
     """
     errors: list[str] = []
     if flow_ctx.outcome == "completed":
@@ -50,11 +53,20 @@ def _collect_flow_errors(flow_ctx) -> list[str]:
         err = result.get("error")
         if err and isinstance(err, str) and err.strip():
             errors.append(f"[{step_id}] {err.strip()}")
-        # Business error message (e.g. {"code": "1", "msg": "权限不足"})
+        # Business error message: only surface ``msg`` when ``code`` is a
+        # failure code, otherwise plain success text would be misreported.
+        code = result.get("code")
+        code_is_failure = (
+            code is not None and str(code).strip().lower() not in _SUCCESS_CODES
+        )
         msg = result.get("msg")
-        if msg and isinstance(msg, str) and msg.strip() and msg not in ("success", "ok", "success"):
-            if not errors or not any(msg in e for e in errors):
-                errors.append(f"[{step_id}] {msg.strip()}")
+        if (
+            code_is_failure
+            and isinstance(msg, str)
+            and msg.strip()
+            and msg.strip().lower() not in ("success", "ok")
+        ):
+            errors.append(f"[{step_id}] {msg.strip()}")
         # Verify step issues (e.g. {"issues": ["创建时间缺失", ...]})
         issues = result.get("issues")
         if issues and isinstance(issues, list):
@@ -128,10 +140,8 @@ def run_case(
     fail_count = 0
 
     for i, row in enumerate(rows):
-        merged = dict(flow_defaults)
-        merged.update(case.params)
-        if case.data:
-            merged.update(row)
+        # ``row`` already merges flow_defaults + case.params (+ the data row).
+        merged = dict(row)
         if params_override:
             merged.update(params_override)
 
@@ -146,6 +156,7 @@ def run_case(
                 service_spec,
                 step_cb=step_cb,
                 console=console,
+                spec_dir=spec_dir,
             )
         except Exception as exc:  # row failure does NOT stop subsequent rows
             elapsed = time.monotonic() - start

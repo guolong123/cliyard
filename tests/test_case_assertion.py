@@ -121,5 +121,15 @@ def test_evaluate_all_returns_triples():
     assert results[1] == (False, assertions[1], None)
 
 
+def test_exists_true_for_explicit_json_null():
+    # present-but-null counts as existing (distinct from "no match")
+    assert evaluate_assertion(mk("exists", "$.name", True), {"name": None}) == (True, None)
+
+
+def test_invalid_jsonpath_raises_value_error():
+    with pytest.raises(ValueError):
+        evaluate_assertion(mk("eq", "$[", "x"), {"a": 1})
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

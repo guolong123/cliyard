@@ -827,22 +827,6 @@ def _execute_for_each(step, context: FlowContext) -> list:
             iter_results[sub_step.id] = sub_result
             iter_ctx.step_state[sub_step.id] = sub_result
 
-            # Best-effort: populate step_meta for for_each sub-steps too.
-            _smeta = {"use": sub_step.use or "", "http_method": "",
-                      "http_path": ""}
-            if getattr(sub_step, "use", None):
-                try:
-                    from cliyard.engine.orchestrator import _lookup_resource_method
-                    _r_s, _m_s = _lookup_resource_method(
-                        sub_step.use, context.service_spec
-                    )
-                    _http = _m_s.get("http", {})
-                    _smeta["http_method"] = _http.get("method", "")
-                    _smeta["http_path"] = _http.get("path", "")
-                except ValueError:
-                    pass
-            iter_ctx.step_meta[sub_step.id] = _smeta
-
         results.append(iter_results)
 
     return results

@@ -273,6 +273,36 @@ def _load_group_definitions(spec_dir: str | Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _json_type_for(value: Any) -> str:
+    """把 Python 值映射为 JSON Schema ``type``（case 参数默认值用）。"""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, (list, tuple)):
+        return "array"
+    return "string"
+
+
+def case_params_schema(params: dict[str, Any] | None) -> dict[str, Any]:
+    """把 case 的 ``params``（名 → 默认值）映射为 JSON Schema。
+
+    Web UI 与 MCP 工具共用同一实现，保证两端 case 表单一致；保留原始类型，
+    不再把 ``0`` / ``False`` 这类 falsy 默认值吞成空串。
+    """
+    properties: dict[str, Any] = {}
+    for name, value in (params or {}).items():
+        prop: dict[str, Any] = {"type": _json_type_for(value)}
+        if value is not None:
+            prop["default"] = value
+        properties[name] = prop
+    return {"type": "object", "properties": properties, "required": []}
+
+
 def build_command_tree(
     spec_dir: str | Path,
     *,
@@ -389,7 +419,7 @@ def build_command_tree(
                 "category": case.category,
                 "category_label": case.category_label,
                 "labels": case.labels,
-                "params_schema": {"type": "object", "properties": {}, "required": []},
+                "params_schema": case_params_schema(case.params),
                 "assert_count": len(case.assert_),
                 "has_data": bool(case.data),
             }
