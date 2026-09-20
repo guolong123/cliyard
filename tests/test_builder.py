@@ -4,7 +4,7 @@ import click.testing
 import yaml
 from unittest.mock import MagicMock
 
-from cliyard.engine.builder import ServiceContext, build_list_command, execute_pipeline
+from cliyard.engine.builder import ServiceContext, build_list_command, execute_pipeline, _parse_content_disposition
 
 LONG_URL = "http://jenkins.ketaops.cc/job/issue%20%E7%BB%9F%E8%AE%A1%E6%95%B4%E7%90%86/"
 
@@ -54,16 +54,19 @@ def test_csv_output_not_wrapped_in_narrow_terminal(monkeypatch):
 
 
 class _FakeResponse:
-    def __init__(self, text="", json_payload=None):
+    def __init__(self, text="", json_payload=None, headers=None):
         self.text = text
         self.status_code = 200
-        self.headers = {"Content-Type": "text/xml"}
+        self.headers = headers if headers is not None else {"Content-Type": "text/xml"}
         self._json = json_payload
 
     def json(self):
         if self._json is not None:
             return self._json
         raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    def iter_content(self, chunk_size=8192):
+        yield self.text.encode() if isinstance(self.text, str) else self.text
 
 
 class _FakeHttpClient:
@@ -112,3 +115,45 @@ def test_raw_text_with_items_path_does_not_attempt_parse():
         http_client=client,
     )
     assert result == "<project/>"
+
+
+def test_parse_content_disposition_rfc5987_dual_form():
+    cd = 'attachment; filename="a.tar.gz"; filename*=UTF-8\'\'a.tar.gz'
+    assert _parse_content_disposition(cd) == "a.tar.gz"
+
+
+def test_parse_content_disposition_extended_form_wins():
+    cd = 'attachment; filename="old.bin"; filename*=UTF-8\'\'%E6%96%B0%E6%96%87%E4%BB%B6.tar.gz'
+    assert _parse_content_disposition(cd) == "新文件.tar.gz"
+
+
+def test_parse_content_disposition_plain_quoted():
+    assert _parse_content_disposition('attachment; filename="report.pdf"') == "report.pdf"
+
+
+def test_parse_content_disposition_plain_unquoted():
+    assert _parse_content_disposition("attachment; filename=report.pdf") == "report.pdf"
+
+
+def test_parse_content_disposition_empty_returns_empty():
+    assert _parse_content_disposition("") == ""
+
+
+def test_parse_content_disposition_no_filename_returns_empty():
+    assert _parse_content_disposition("attachment") == ""
+
+
+def test_file_download_uses_clean_filename(tmp_path, monkeypatch):
+    cd = 'attachment; filename="pkg.tar.gz"; filename*=UTF-8\'\'pkg.tar.gz'
+    client = _FakeHttpClient(_FakeResponse(text=b"\x1f\x8b", headers={"Content-Disposition": cd, "Content-Type": "application/gzip"}))
+    monkeypatch.chdir(tmp_path)
+    result = execute_pipeline(
+        {},
+        {"http": {"method": "GET", "path": "/pkg.tar.gz"}, "response_type": "file"},
+        {"path": "pkg"},
+        ServiceContext(base_url="http://test.local"),
+        http_client=client,
+    )
+    assert result["_downloaded"] == "pkg.tar.gz"
+    assert (tmp_path / "pkg.tar.gz").exists()
+    assert not [p for p in tmp_path.iterdir() if "filename*=" in p.name]
