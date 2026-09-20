@@ -45,9 +45,10 @@ const spec: SpecData = {
       step_count: 4,
     },
   ],
+  cases: [],
 };
 
-const emptySpec: SpecData = { service: { name: "demo", description: "" }, groups: [], flows: [] };
+const emptySpec: SpecData = { service: { name: "demo", description: "" }, groups: [], flows: [], cases: [] };
 
 /** mock spec：两级分组（group → resources，模拟 ketacli target 组） */
 const twoLevelSpec: SpecData = {
@@ -107,6 +108,7 @@ const twoLevelSpec: SpecData = {
     },
   ],
   flows: [],
+  cases: [],
 };
 
 /** mock spec：2 个同名分组（templates）——模拟 /api/spec 重复 group 名（合法输入） */
@@ -154,6 +156,7 @@ const dupGroupSpec: SpecData = {
       step_count: 2,
     },
   ],
+  cases: [],
 };
 
 function renderTree(selected: Selection | null = null, onSelect = vi.fn()) {

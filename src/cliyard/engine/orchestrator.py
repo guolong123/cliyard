@@ -71,6 +71,8 @@ class FlowContext:
     _flow_skipped: bool = False
     _current_flow: Any = None
     verbose: bool = False
+    step_meta: dict[str, dict] = field(default_factory=dict)
+    outcome: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +577,7 @@ def _emit_step(
 def _execute_action_item(
     item: dict,
     context: FlowContext,
+    parent_index: int = 0,
 ) -> None:
     """Execute a single action item from a ``then`` / ``else`` block.
 
@@ -627,7 +630,9 @@ def _execute_action_item(
             result, _ = _execute_step(sub_step, context)
             context.step_state[step_id] = result
             _emit_step(context.step_cb, "step_done", {
-                "index": 0,
+                # 子步骤归入父步骤卡片：使用父步骤的真实 index，
+                # 让 web UI 将接口响应展示在对应步骤卡片（而非孤立"步骤 0"）。
+                "index": parent_index,
                 "step_id": step_id,
                 "label": item.get("description", step_id),
                 "status": "ok",
@@ -655,6 +660,7 @@ def handle_on_result(
     on_result_list: list[dict],
     context: FlowContext,
     step_id: str,
+    parent_index: int = 0,
 ) -> None:
     """Evaluate conditional branching after a step completes.
 
@@ -692,7 +698,7 @@ def handle_on_result(
                 matched = True
                 then_block = _normalize_on_result_block(item.get("then", []))
                 for action_item in then_block:
-                    _execute_action_item(action_item, context)
+                    _execute_action_item(action_item, context, parent_index)
                     # Stop processing actions if a control action fired
                     if context._flow_aborted:
                         return
@@ -705,7 +711,7 @@ def handle_on_result(
                     matched = True
                     else_block = _normalize_on_result_block(item["else"])
                     for action_item in else_block:
-                        _execute_action_item(action_item, context)
+                        _execute_action_item(action_item, context, parent_index)
                         if context._flow_aborted:
                             return
                         if context._flow_skipped:
@@ -717,7 +723,7 @@ def handle_on_result(
             matched = True
             else_block = _normalize_on_result_block(item["else"])
             for action_item in else_block:
-                _execute_action_item(action_item, context)
+                _execute_action_item(action_item, context, parent_index)
                 if context._flow_aborted:
                     return
                 if context._flow_skipped:
@@ -729,7 +735,7 @@ def handle_on_result(
             matched = True
             then_block = _normalize_on_result_block(item["then"])
             for action_item in then_block:
-                _execute_action_item(action_item, context)
+                _execute_action_item(action_item, context, parent_index)
                 if context._flow_aborted:
                     return
                 if context._flow_skipped:
@@ -820,6 +826,22 @@ def _execute_for_each(step, context: FlowContext) -> list:
 
             iter_results[sub_step.id] = sub_result
             iter_ctx.step_state[sub_step.id] = sub_result
+
+            # Best-effort: populate step_meta for for_each sub-steps too.
+            _smeta = {"use": sub_step.use or "", "http_method": "",
+                      "http_path": ""}
+            if getattr(sub_step, "use", None):
+                try:
+                    from cliyard.engine.orchestrator import _lookup_resource_method
+                    _r_s, _m_s = _lookup_resource_method(
+                        sub_step.use, context.service_spec
+                    )
+                    _http = _m_s.get("http", {})
+                    _smeta["http_method"] = _http.get("method", "")
+                    _smeta["http_path"] = _http.get("path", "")
+                except ValueError:
+                    pass
+            iter_ctx.step_meta[sub_step.id] = _smeta
 
         results.append(iter_results)
 
@@ -1366,7 +1388,7 @@ def run_flow(
     allow_dirs: Any = None,
     server_tmp_files: Any = None,
     spec_dir: str | None = None,
-) -> None:
+) -> FlowContext:
     """Execute a flow definition sequentially.
 
     Creates a shared :class:`~cliyard.client.http.HttpClient`, runs the
@@ -1479,7 +1501,8 @@ def run_flow(
     if not flow_spec.steps:
         console.print("[yellow]Flow completed (no steps)[/yellow]")
         _emit_step(step_cb, "flow_end", {"outcome": "completed", "step_count": 0})
-        return
+        context.outcome = "completed"
+        return context
 
     _emit_step(step_cb, "flow_start", {"step_count": len(flow_spec.steps)})
 
@@ -1506,6 +1529,19 @@ def run_flow(
             # Store result in step_state for subsequent steps
             context.step_state[step.id] = result
             step_results.append({"id": step.id, "label": label, "status": "ok"})
+            _meta = {"use": step.use or "", "http_method": "", "http_path": ""}
+            if step.use:
+                try:
+                    from cliyard.engine.orchestrator import _lookup_resource_method
+                    _r_spec, _m_spec = _lookup_resource_method(
+                        step.use, context.service_spec
+                    )
+                    _http = _m_spec.get("http", {})
+                    _meta["http_method"] = _http.get("method", "")
+                    _meta["http_path"] = _http.get("path", "")
+                except ValueError:
+                    pass
+            context.step_meta[step.id] = _meta
             _elapsed = time.perf_counter() - _start
 
             # Verbose / show_response: print request & response details
@@ -1542,16 +1578,18 @@ def run_flow(
 
             # Conditional branching — evaluate on_result if configured
             if step.on_result:
-                handle_on_result(step.on_result, context, step.id)
+                handle_on_result(step.on_result, context, step.id, step_index)
                 # Check if a control action was triggered
                 if context._flow_aborted:
                     _show_flow_summary(console, step_results, "returned")
                     _emit_step(step_cb, "flow_end", {"outcome": "returned", "step_count": len(step_results)})
-                    return
+                    context.outcome = "returned"
+                    return context
                 if context._flow_skipped:
                     _show_flow_summary(console, step_results, "skipped")
                     _emit_step(step_cb, "flow_end", {"outcome": "skipped", "step_count": len(step_results)})
-                    return
+                    context.outcome = "skipped"
+                    return context
 
         except CliyError as e:
             _msg = str(e).replace("[", "[[]").replace("]", "[]]")
@@ -1579,7 +1617,8 @@ def run_flow(
                 },
             )
             _emit_step(step_cb, "flow_end", {"outcome": "failed", "step_count": len(step_results)})
-            return
+            context.outcome = "failed"
+            return context
         except Exception as e:
             _msg = str(e).replace("[", "[[]").replace("]", "[]]")
             if verbose or getattr(step, "show_response", False):
@@ -1606,11 +1645,14 @@ def run_flow(
                 },
             )
             _emit_step(step_cb, "flow_end", {"outcome": "failed", "step_count": len(step_results)})
-            return
+            context.outcome = "failed"
+            return context
 
     _show_flow_summary(console, step_results, "completed")
     _trigger_flow_hooks("on_end", context)
     _emit_step(step_cb, "flow_end", {"outcome": "completed", "step_count": len(step_results)})
+    context.outcome = "completed"
+    return context
 
 
 def _show_flow_summary(

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from cliyard.engine.labels import resolve_labels
-from cliyard.engine.loader import load_flows, load_service
+from cliyard.engine.loader import load_cases, load_flows, load_service
 
 # JSON Schema 属性位置的固定遍历顺序（与 method params 的 YAML 分组一致）
 _PARAM_LOCATIONS = ("path", "query", "header", "body", "argument")
@@ -379,6 +379,22 @@ def build_command_tree(
             }
         )
 
+    case_list: list[dict[str, Any]] = []
+    for case in load_cases(spec_dir):
+        case_list.append(
+            {
+                "name": case.name,
+                "description": case.description,
+                "flow": case.flow,
+                "category": case.category,
+                "category_label": case.category_label,
+                "labels": case.labels,
+                "params_schema": {"type": "object", "properties": {}, "required": []},
+                "assert_count": len(case.assert_),
+                "has_data": bool(case.data),
+            }
+        )
+
     return {
         "service": {
             "name": service.get("name"),
@@ -387,4 +403,5 @@ def build_command_tree(
         },
         "groups": groups,
         "flows": flow_list,
+        "cases": case_list,
     }

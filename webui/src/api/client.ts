@@ -47,6 +47,19 @@ export interface Flow {
   step_count: number;
 }
 
+/** 测试用例元数据（_cases.yaml 注册，schema_bridge.build_command_tree 输出） */
+export interface CaseMeta {
+  name: string;
+  description: string;
+  flow: string;
+  category: string;
+  category_label: string;
+  labels: string[];
+  params_schema: Record<string, unknown>;
+  assert_count: number;
+  has_data: boolean;
+}
+
 /** _auth.yaml web 品牌配置 */
 export interface WebBranding {
   logo_url?: string;
@@ -66,6 +79,7 @@ export interface SpecData {
   };
   groups: Group[];
   flows: Flow[];
+  cases: CaseMeta[];
 }
 
 /** SSE 执行事件：{"type", **payload, "time"}（validate/auth/request/response/format/done/error） */
@@ -171,7 +185,7 @@ export function fetchSpec(): Promise<SpecData> {
 
 /** POST /api/execute：提交命令/流程执行，立即返回 execution_id */
 export function execute(
-  kind: "command" | "flow",
+  kind: "command" | "flow" | "case",
   target: string,
   params: Record<string, unknown> = {},
 ): Promise<{ execution_id: string }> {
@@ -226,7 +240,7 @@ export function fetchExecution(id: string): Promise<ExecutionDetail> {
 export function listExecutions(
   limit = 20,
   offset = 0,
-  kind?: "command" | "flow",
+  kind?: "command" | "flow" | "case",
 ): Promise<{ total: number; items: HistoryItem[] }> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (kind) params.set("kind", kind);

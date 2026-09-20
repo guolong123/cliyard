@@ -41,13 +41,17 @@ function schemaForSelection(spec: SpecData | null, selected: Selection | null): 
     }
     return null;
   }
+  if (selected.kind === "case") {
+    const c = spec.cases?.find((c) => c.name === selected.target);
+    return c?.params_schema ?? null;
+  }
   const flow = spec.flows.find((f) => f.command === selected.target);
   return flow?.params_schema ?? null;
 }
 
 /** 最近一次执行（供右侧「重新执行」复用 params） */
 interface LastRun {
-  kind: "command" | "flow";
+  kind: "command" | "flow" | "case";
   target: string;
   params: Record<string, unknown>;
 }

@@ -1,0 +1,29 @@
+cases:
+  smoke-basic:
+    description: 冒烟用例
+    category: demo
+    category_label: 演示
+    labels: [smoke, daily]
+    flow: supplier-introduce
+    params:
+      supplier_name: "测试供应商A"
+      brand_key_word: "西门子"
+    assert:
+      - step: create_introduce
+        jsonpath: "$.code"
+        operator: eq
+        expected: "0"
+  csp-check:
+    description: CSP 检查
+    labels: [csp]
+    flow: batch-csp
+    data:
+      - company_name: "Rick测试公司"
+        company_id: 8101334
+      - company_name: "测试公司B"
+        company_id: 9999
+    assert:
+      - step: csp_import
+        jsonpath: "$.code"
+        operator: eq
+        expected: "200"

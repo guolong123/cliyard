@@ -323,6 +323,142 @@ def create_cli(
         flow_group.add_command(run_group)
         cli.add_command(flow_group)
 
+    # Add case group: orchestrated test cases over flows (symmetric to flow)
+    from cliyard.engine.loader import load_cases
+    from cliyard.engine.case_runner import run_case
+
+    cases = load_cases(spec_path)
+    if cases:
+        case_group = LabeledGroup(name="case", help="List and run orchestrated test cases over flows")
+
+        def _filter_cases(raw_cases, label: str | None):
+            if not label:
+                return raw_cases
+            wanted = {tok for tok in (x.strip() for x in label.split(",")) if tok}
+            return [c for c in raw_cases if wanted.intersection(set(c.labels))]
+
+        def _parse_params(param_args):
+            params_override = {}
+            for item in param_args or []:
+                if "=" not in item:
+                    raise click.ClickException(f"Invalid --param '{item}': expected key=value")
+                key, _, value = item.partition("=")
+                params_override[key.strip()] = value
+            return params_override
+
+        @case_group.command(name="list")
+        @click.option("--label", type=str, default=None,
+                      help="Comma-separated labels; include cases matching ANY label (OR).")
+        def _list_cases(label: str | None):
+            """List available test cases on flows, grouped by category."""
+            from rich.console import Console
+            from rich.table import Table
+
+            console = Console()
+            filtered = _filter_cases(cases, label)
+
+            grouped = defaultdict(list)
+            for c in filtered:
+                grouped[c.category or "其他"].append(c)
+
+            for cat, cat_cases in grouped.items():
+                label_text = cat_cases[0].category_label or cat
+                table = Table(title=f"[{label_text}]", box=None, show_header=False, padding=(0, 2))
+                for c in cat_cases:
+                    desc = c.description or ""
+                    table.add_row(c.name, desc)
+                console.print(table)
+                console.print()
+
+        @case_group.command(name="run")
+        @click.argument("case_name", required=False)
+        @click.option("--label", type=str, default=None,
+                      help="Comma-separated labels; run cases matching ANY label (OR).")
+        @click.option("--param", "param_args", type=str, multiple=True,
+                      help="Input override as key=value (repeatable).")
+        def _run_cases(case_name: str | None, label: str | None, param_args):
+            """Run test cases over flows and report pass/fail per assertion."""
+            from rich.console import Console
+            from rich.table import Table
+
+            console = Console()
+            params_override = _parse_params(param_args)
+
+            if case_name is not None:
+                matched = [c for c in cases if c.name == case_name]
+                if not matched:
+                    console.print(f"[red]No case named '{case_name}' found.[/red]")
+                    raise SystemExit(1)
+            else:
+                matched = _filter_cases(cases, label)
+
+            if not matched:
+                console.print("[yellow]No cases matched the given filters.[/yellow]")
+                raise SystemExit(0)
+
+            overall_pass = True
+            definition_error = False
+
+            for case in matched:
+                console.print()
+                try:
+                    report = run_case(case, str(spec_path), base_ctx, service,
+                                      params_override=params_override, console=console)
+                except ValueError as exc:  # case references a missing flow
+                    console.print(f"[red]Case '{case.name}': {exc}[/red]")
+                    definition_error = True
+                    continue
+
+                table = Table(title=f"Case: {case.name}",
+                              box=None, show_header=True, header_style="bold",
+                              padding=(0, 2))
+                table.add_column("CASE")
+                table.add_column("名称")
+                table.add_column("接口")
+                table.add_column("结果")
+                table.add_column("耗时")
+                for row in report["rows"]:
+                    http_desc = ""
+                    if row.get("http_method") or row.get("http_path"):
+                        http_desc = f"{row.get('http_method', '') or ''} {row.get('http_path', '') or ''}".strip()
+                    else:
+                        http_desc = "N/A"
+                    passed = row.get("all_pass", False)
+                    outcome = row.get("outcome", "")
+                    if outcome == "error":
+                        result_cell = "[red]ERROR[/red]"
+                    else:
+                        result_cell = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
+                    table.add_row(case.name, row.get("name") or "", http_desc,
+                                  result_cell, f"{row.get('elapsed', 0.0):.3f}s")
+                    if not passed:
+                        for apr in row.get("assertions_passed") or []:
+                            if not apr.get("passed"):
+                                detail = (
+                                    f"  .  {apr.get('step')} {apr.get('jsonpath')} "
+                                    f"{apr.get('operator')} expected={apr.get('expected')!r} "
+                                    f"actual={apr.get('actual')!r}"
+                                )
+                                table.add_row("", "", "", detail, "")
+                        # Show flow step errors when flow did not complete
+                        for ferr in row.get("flow_errors") or []:
+                            table.add_row("", "", "", f"[red]  ✗ {ferr}[/red]", "")
+                console.print(table)
+
+                if not report["all_pass"]:
+                    overall_pass = False
+
+            console.print()
+            if definition_error:
+                console.print("[red]Aborting: some cases reference a missing flow (definition error).[/red]")
+                raise SystemExit(2)
+            if not overall_pass:
+                console.print("[red]Some cases FAILED.[/red]")
+                raise SystemExit(1)
+            console.print("[green]All cases passed.[/green]")
+
+        cli.add_command(case_group)
+
     # ``server`` sub-command: starts the web UI for this CLI's spec dir
     # (captured via closure — no spec-dir argument needed).
     from cliyard.runtime.server_command import build_server_command

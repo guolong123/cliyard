@@ -166,3 +166,48 @@ class FlowSpec:
     params: dict[str, Any] = field(default_factory=dict)
     steps: list[FlowStep] = field(default_factory=list)
     hooks: dict[str, dict[str, Any]] | None = None
+
+
+@dataclass
+class CaseAssertion:
+    """A single assertion applied to a flow step result.
+
+    Attributes:
+        step: Flow step ID to assert against.
+        jsonpath: JSONPath expression to extract the value.
+        operator: Comparison operator (eq/ne/contains/gt/gte/lt/lte/regex/exists).
+        expected: Expected value to compare against.
+    """
+
+    step: str
+    jsonpath: str
+    operator: str
+    expected: Any
+
+
+@dataclass
+class CaseSpec:
+    """A test case that runs a flow with given params and asserted results.
+
+    Attributes:
+        name: Case name (key in _cases.yaml).
+        flow: Flow command name to run.
+        description: Human-readable description.
+        category: Case categorization tag.
+        category_label: Human-readable label for the category.
+        labels: Labels for filtering (e.g. smoke, regression).
+        params: Default input params for the flow.
+        data: Optional multi-row parameterization; each row merges with params.
+        assert_: List of assertions to evaluate against flow step results.
+    """
+
+    name: str
+    flow: str
+    description: str = ""
+    category: str = ""
+    category_label: str = ""
+    labels: list[str] = field(default_factory=list)
+    params: dict[str, Any] = field(default_factory=dict)
+    data: list[dict[str, Any]] = field(default_factory=list)
+    assert_: list[CaseAssertion] = field(default_factory=list)
+    expected_return: bool = False

@@ -15,12 +15,12 @@ import {
   type StatusTheme,
   type AccentTheme,
 } from "../styles/tokens";
-import type { Flow, GroupResource, SpecData, TreeItem, Favorite } from "../api/client";
+import type { Flow, GroupResource, SpecData, TreeItem, Favorite, CaseMeta } from "../api/client";
 import { fetchFavorites, toggleFavorite } from "../api/client";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-export type SideTab = "commands" | "flows" | "favorites";
+export type SideTab = "commands" | "flows" | "favorites" | "cases";
 
 /** 分组头 accent 轮换顺序（命令/flow 组共享，按索引循环分配）：蓝→紫→绿→琥珀→玫红 */
 const GROUP_ACCENTS: AccentTheme[] = [
@@ -31,9 +31,9 @@ const GROUP_ACCENTS: AccentTheme[] = [
   accent.rose,
 ];
 
-/** 选中项：命令 = {kind:"command", target:"resource.method"}；flow = {kind:"flow", target: flow.command} */
+/** 选中项：命令 = {kind:"command", target:"resource.method"}；flow = {kind:"flow", target: flow.command}；case = {kind:"case", target: case.name} */
 export interface Selection {
-  kind: "command" | "flow";
+  kind: "command" | "flow" | "case";
   target: string;
 }
 
@@ -185,6 +185,10 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
   const [expandedFlowGroups, setExpandedFlowGroups] = useState<Set<string>>(
     () => new Set(),
   );
+  // case 组默认折叠
+  const [expandedCaseGroups, setExpandedCaseGroups] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   // 收藏夹
   const [favorites, setFavorites] = useState<Favorite[]>([]);
@@ -312,6 +316,19 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
     [spec.flows, q],
   );
 
+  // case 搜索：name/description/flow
+  const filteredCases = useMemo(
+    () =>
+      (spec.cases ?? []).filter((c: CaseMeta) => {
+        return (
+          c.name.toLowerCase().includes(q) ||
+          c.description.toLowerCase().includes(q) ||
+          c.flow.toLowerCase().includes(q)
+        );
+      }),
+    [spec.cases, q],
+  );
+
   /** 按 category 分组的 flows：[[category, flows], ...]；未设置 category 归入"其他" */
   const groupedFlows = useMemo(() => {
     const groups: Record<string, Flow[]> = {};
@@ -323,10 +340,27 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
     return Object.entries(groups);
   }, [filteredFlows]);
 
+  /** 按 category 分组的 cases：[[category, cases], ...]；未设置 category 归入"其他" */
+  const groupedCases = useMemo(() => {
+    const groups: Record<string, CaseMeta[]> = {};
+    for (const c of filteredCases) {
+      const cat = c.category || "其他";
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(c);
+    }
+    return Object.entries(groups);
+  }, [filteredCases]);
+
   // 预计算 flow 分组 accent（按分组顺序循环分配），避免渲染时 map+indexOf 的 O(n²)
   const flowGroupAccents = useMemo<AccentTheme[]>(
     () => groupedFlows.map((_, i) => GROUP_ACCENTS[i % GROUP_ACCENTS.length]),
     [groupedFlows],
+  );
+
+  // 预计算 case 分组 accent（按分组顺序循环分配），避免渲染时 map+indexOf 的 O(n²)
+  const caseGroupAccents = useMemo<AccentTheme[]>(
+    () => groupedCases.map((_, i) => GROUP_ACCENTS[i % GROUP_ACCENTS.length]),
+    [groupedCases],
   );
 
   // 搜索时自动展开所有匹配到的 flow 组；无搜索词时尊重用户折叠状态
@@ -369,6 +403,13 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
     for (const [cat] of groupedFlows) all.add(cat);
     return all;
   }, [expandedFlowGroups, groupedFlows, searchActive]);
+
+  const effectiveExpandedCaseGroups = useMemo(() => {
+    if (!searchActive) return expandedCaseGroups;
+    const all = new Set<string>();
+    for (const [cat] of groupedCases) all.add(cat);
+    return all;
+  }, [expandedCaseGroups, groupedCases, searchActive]);
 
   /** 命令项按钮（target = 资源名.方法名，与 executor 的 resource.method 语义一致） */
   const renderCommandItem = (c: TreeItem, targetPrefix: string, groupName: string, acc: AccentTheme) => {
@@ -560,7 +601,7 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
           data-testid="tree-search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder={sideTab === "commands" ? "搜索命令…" : sideTab === "flows" ? "搜索流程…" : "搜索收藏…"}
+          placeholder={sideTab === "commands" ? "搜索命令…" : sideTab === "flows" ? "搜索流程…" : sideTab === "cases" ? "搜索用例…" : "搜索收藏…"}
           style={{
             flex: 1,
             minWidth: 0,
@@ -767,6 +808,181 @@ export default function CommandTree({ spec, selected, onSelect }: CommandTreePro
                         {g.commands.map((c) => renderCommandItem(c, g.group, g.group, acc))}
                       </div>
                     ))}
+                </div>
+              );
+            })}
+          </div>
+        )
+      ) : sideTab === "cases" ? (
+        filteredCases.length === 0 ? (
+          <EmptyState text="无 case" />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
+            {groupedCases.map(([cat, cases], cgIdx) => {
+              const catLabel = cases[0]?.category_label || cat;
+              const expanded = effectiveExpandedCaseGroups.has(cat);
+              const acc = caseGroupAccents[cgIdx % caseGroupAccents.length];
+              return (
+                <div key={cat}>
+                  {/* 分组头 - 沿用命令组/flow 组头的折叠样式 */}
+                  <button
+                    type="button"
+                    data-testid="case-group-header"
+                    className="cliyard-group-header"
+                    onClick={() => {
+                      setExpandedCaseGroups((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(cat)) next.delete(cat);
+                        else next.add(cat);
+                        return next;
+                      });
+                    }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: space.xs,
+                      width: "100%",
+                      padding: `4px ${space.xs}px`,
+                      marginBottom: space.sm,
+                      border: "none",
+                      borderRadius: radius.sm,
+                      backgroundColor: acc.bg,
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        width: 12,
+                        height: 12,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                        transition: "transform .15s ease",
+                        transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+                        color: acc.text,
+                      }}
+                    >
+                      <svg viewBox="0 0 8 8" width={6} height={6} fill="currentColor">
+                        <path d="M1.5 0L6.5 4L1.5 8z" />
+                      </svg>
+                    </span>
+                    <span
+                      style={{
+                        flex: 1,
+                        fontSize: fontSize.sm,
+                        fontWeight: 600,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.06,
+                        color: acc.text,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {catLabel}
+                    </span>
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        fontSize: fontSize.xs,
+                        color: acc.text,
+                        fontWeight: 400,
+                        opacity: 0.8,
+                      }}
+                    >
+                      {cases.length}
+                    </span>
+                  </button>
+                  {expanded && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      {cases.map((c) => {
+                        const on = selected?.kind === "case" && selected.target === c.name;
+                        return (
+                          <button
+                            key={c.name}
+                            type="button"
+                            data-testid="case-item"
+                            data-active={on ? "true" : "false"}
+                            onClick={() => onSelect({ kind: "case", target: c.name })}
+                            className="cliyard-flow-item"
+                            style={{ ["--acc-text" as string]: acc.text }}
+                          >
+                            {on && <ActiveBar top={14} />}
+                            {/* 名称行：mono 名称 + case pill + labels pills + assert count pill */}
+                            <span style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
+                              <span
+                                className="cliyard-flow-name"
+                                style={{
+                                  fontFamily: fontFamily.mono,
+                                  fontSize: fontSize.sm,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {c.name}
+                              </span>
+                              <span
+                                style={{
+                                  flexShrink: 0,
+                                  borderRadius: radius.pill,
+                                  padding: "0 6px",
+                                  backgroundColor: accent.rose.bg,
+                                  border: `1px solid ${accent.rose.line}`,
+                                  color: accent.rose.text,
+                                  fontSize: 9,
+                                  fontWeight: 600,
+                                  lineHeight: "14px",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                case
+                              </span>
+                              {c.labels.map((lb) => (
+                                <LabelPill key={lb} label={lb} />
+                              ))}
+                              {c.assert_count > 0 && (
+                                <span
+                                  style={{
+                                    flexShrink: 0,
+                                    borderRadius: radius.pill,
+                                    padding: "0 6px",
+                                    backgroundColor: neutral[100],
+                                    border: `1px solid ${neutral[200]}`,
+                                    color: neutral[500],
+                                    fontSize: 9,
+                                    fontWeight: 600,
+                                    lineHeight: "14px",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {c.assert_count} 断言
+                                </span>
+                              )}
+                            </span>
+                            {/* 描述行：两行内省略 */}
+                            {c.description && (
+                              <span
+                                style={{
+                                  fontSize: fontSize.xs,
+                                  color: neutral[500],
+                                  lineHeight: 1.5,
+                                  overflow: "hidden",
+                                  display: "-webkit-box",
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: "vertical",
+                                }}
+                              >
+                                {c.description}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -30,6 +30,7 @@ from typing import Any
 import click
 from mcp.types import Tool
 
+from cliyard.engine.loader import load_cases
 from cliyard.server.schema_bridge import _file_upload_guide, build_command_tree
 
 logger = logging.getLogger("cliyard.server.mcp")
@@ -405,6 +406,31 @@ def build_tool_specs(
         )
         _register(specs, name, spec)
 
+    # 测试用例（case）→ case.<name> 工具（无用例时不注册，保持工具表不变）
+    cases = load_cases(spec_dir)
+    for case in cases:
+        name = f"case.{case.name}"
+        properties = {k: {"type": "string", "default": str(v) if v else ""} for k, v in case.params.items()}
+        input_schema = {"type": "object", "properties": properties, "required": []}
+        spec = ToolSpec(
+            name=name,
+            kind="case",
+            target=case.name,
+            description=case.description or f"Run case {case.name}",
+            input_schema=input_schema,
+        )
+        _register(specs, name, spec)
+
+    # case.list — 列出所有可用用例的元信息（方便 MCP 客户端发现）
+    if cases:
+        _register(specs, "case.list", ToolSpec(
+            name="case.list",
+            kind="case_list",
+            target="",
+            description="List all available test cases with their metadata",
+            input_schema=dict(_EMPTY_SCHEMA),
+        ))
+
     # 命令级插件（@register_command）→ cmd.<command> 工具（命名空间隔离；
     # grouped 模式按顶层命名空间合并为 cmd.<ns> 分组工具）
     specs.update(build_plugin_tool_specs(spec_dir, mode=mode))
@@ -426,19 +452,6 @@ def _duplicate_resource_names(groups: list[dict[str, Any]]) -> set[str]:
             gname: str = group.get("group") or ""
             seen.setdefault(rname, set()).add(gname)
     return {name for name, groups_ in seen.items() if len(groups_) > 1}
-
-    for flow in tree.get("flows") or []:
-        name = f"flow.{flow.get('name')}"
-        spec = ToolSpec(
-            name=name,
-            kind="flow",
-            target=flow.get("command") or flow.get("name") or name,
-            description=flow.get("description") or flow.get("command") or name,
-            input_schema=flow.get("params_schema") or dict(_EMPTY_SCHEMA),
-        )
-        _register(specs, name, spec)
-
-    return specs
 
 
 def _register(specs: dict[str, ToolSpec], name: str, spec: ToolSpec) -> None:
