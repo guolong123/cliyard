@@ -323,8 +323,50 @@ class MCPExecutor:
             return f"{out}\n[stderr] {err}"
         return out or err or f"(no output from {spec.target})"
 
+    def execute_case(self, case_name: str, params: dict[str, Any]) -> Any:
+        """Execute a case and return aggregated results."""
+        service = self._load_service()
+        from cliyard.engine.case_runner import run_case
+
+        case_spec = next(
+            (c for c in load_cases(self.spec_dir) if c.name == case_name),
+            None,
+        )
+        if case_spec is None:
+            raise ValueError(
+                f"Case '{case_name}' not found in spec dir {self.spec_dir}"
+            )
+        service_ctx = build_service_context(
+            self.spec_dir,
+            service,
+            base_url_override=self.server_override,
+        )
+        result = run_case(
+            case_spec, self.spec_dir, service_ctx, service, params_override=params
+        )
+        return redact_sensitive(result)
+
+    def execute_case_list(self) -> Any:
+        """Return metadata for all available test cases."""
+        cases = load_cases(self.spec_dir)
+        return [
+            {
+                "name": c.name,
+                "description": c.description,
+                "flow": c.flow,
+                "labels": c.labels,
+                "assert_count": len(c.assert_),
+                "has_data": bool(c.data),
+            }
+            for c in cases
+        ]
+
     def execute_spec(self, spec: ToolSpec, arguments: dict[str, Any]) -> Any:
-        """按 ToolSpec 分派执行（command / flow / plugin / grouped）。"""
+        """按 ToolSpec 分派执行（command / flow / plugin / case / grouped）。"""
+        if spec.kind == "case":
+            return self.execute_case(spec.target, arguments)
+        if spec.kind == "case_list":
+            return self.execute_case_list()
         if spec.kind == "flow":
             return self.execute_flow(spec.target, arguments)
         if spec.kind == "plugin":

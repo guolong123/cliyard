@@ -18,7 +18,7 @@ import {
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 export interface CommandFormProps {
-  kind: "command" | "flow";
+  kind: "command" | "flow" | "case";
   target: string;
   schema: Record<string, unknown> | null;
   onExecute: (executionId: string, params?: Record<string, unknown>) => void;
@@ -231,7 +231,7 @@ const CommandForm = forwardRef<CommandFormHandle, CommandFormProps>(function Com
           {target}
         </h2>
         <p style={{ margin: `${space.xs}px 0 0`, fontSize: fontSize.xs, color: neutral[400], ...baseFont }}>
-          {kind === "command" ? "由 YAML spec 自动渲染" : "由 _flows.yaml 注册"}
+          {kind === "command" ? "由 YAML spec 自动渲染" : kind === "flow" ? "由 _flows.yaml 注册" : "由 _cases.yaml 注册"}
         </p>
       </div>
 
@@ -309,7 +309,7 @@ const CommandForm = forwardRef<CommandFormHandle, CommandFormProps>(function Com
           }}
           style={{ flex: 1, padding: `${space.sm + 2}px ${space.lg}px` }}
         >
-          {submitting ? "执行中…" : kind === "command" ? "执行" : "运行流程"}
+          {submitting ? "执行中…" : kind === "command" ? "执行" : kind === "flow" ? "运行流程" : "运行 Case"}
         </button>
         <button
           type="button"

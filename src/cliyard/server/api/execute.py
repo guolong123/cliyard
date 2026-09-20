@@ -4,8 +4,8 @@
 * ``GET /api/executions/{id}/stream`` —— SSE 事件流（sse-starlette）；
 * ``GET /api/executions/{id}`` —— 轮询兜底：当前状态 + 全量 steps。
 
-校验规则：kind 必须为 ``command|flow``、target 非空、command target 必须
-是 ``resource.method`` 格式，否则 400；未知 resource/method/flow 不在此处
+校验规则：kind 必须为 ``command|flow|case``、target 非空、command target 必须
+是 ``resource.method`` 格式，否则 400；未知 resource/method/flow/case 不在此处
 拦截——由后台线程查找失败并推送 ``{"type": "error"}`` 事件（执行仍在，
 status=error）。
 """
@@ -27,18 +27,20 @@ router = APIRouter()
 class ExecuteRequest(BaseModel):
     """POST /api/execute 请求体。"""
 
-    kind: str = Field(..., description='"command" | "flow"')
-    target: str = Field(..., description='"resource.method" 或 flow command')
+    kind: str = Field(..., description='"command" | "flow" | "case"')
+    target: str = Field(..., description='"resource.method" / flow command / case 名称')
     params: dict[str, Any] = Field(default_factory=dict, description="执行参数（平铺 dict）")
 
 
 @router.post("/execute")
 async def execute(request: Request, body: ExecuteRequest):
-    """提交一个命令/流程执行，立即返回 ``execution_id``（后台线程执行）。"""
-    if body.kind not in ("command", "flow"):
+    """提交一个命令/流程/用例执行，立即返回 ``execution_id``（后台线程执行）。"""
+    if body.kind not in ("command", "flow", "case"):
         return JSONResponse(
             status_code=400,
-            content={"detail": f"kind must be 'command' or 'flow', got {body.kind!r}"},
+            content={
+                "detail": f"kind must be 'command', 'flow' or 'case', got {body.kind!r}"
+            },
         )
     if not body.target:
         return JSONResponse(status_code=400, content={"detail": "target is required"})
@@ -50,7 +52,11 @@ async def execute(request: Request, body: ExecuteRequest):
             },
         )
     try:
-        if body.kind == "command":
+        if body.kind == "case":
+            execution_id = execution_manager.submit_case(
+                request.app.state.spec_dir, body.target, body.params
+            )
+        elif body.kind == "command":
             execution_id = execution_manager.submit_command(
                 request.app.state.spec_dir, body.target, body.params
             )

@@ -432,10 +432,12 @@ export default function StepsPanel({ executionId, onReExecute }: StepsPanelProps
 
     steps.forEach((ev, i) => {
       // 1) pipeline 事件（validate/auth/request/response/format 等，无 index）
-      if (!ev.type.startsWith("step_") && ev.type !== "flow_end" && ev.type !== "flow_start" && ev.type !== "done" && ev.type !== "error") {
+      if (!ev.type.startsWith("step_") && ev.type !== "flow_end" && ev.type !== "flow_start" && ev.type !== "done" && ev.type !== "error" && ev.type !== "case_report") {
         pendingPipeline.push(ev);
         return;
       }
+      // 1b) case_report → 已在 caseReport useMemo 单独提取，跳过
+      if (ev.type === "case_report") return;
 
       // 2) flow_end / flow_start / done → 跳过（不纳入步骤卡片）
       if (ev.type === "flow_end" || ev.type === "flow_start" || ev.type === "done") {
@@ -628,6 +630,16 @@ const card: StepCard = {
     return list;
   }, [steps, loading]);
 
+  // case_report 事件 → 独立汇总卡片（展示 case 级 pass/fail + 每行 flow_errors）
+  const caseReport = useMemo(() => {
+    const ev = steps.find((s) => s.type === "case_report");
+    if (!ev) return null;
+    const report = (ev as { report?: unknown }).report as
+      | { case?: string; flow?: string; rows?: Array<Record<string, unknown>>; pass_count?: number; fail_count?: number; all_pass?: boolean }
+      | undefined;
+    return report ?? null;
+  }, [steps]);
+
   // 顶部 badge
   const doneSteps = steps.filter((s) => s.type === "step_done").length;
   const flowStartCount = steps.find((s) => s.type === "flow_start")?.step_count;
@@ -743,6 +755,57 @@ const card: StepCard = {
 
       {activeTab === "steps" ? (
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {caseReport && (
+            <div data-testid="case-report" style={{ margin: space.lg, padding: space.lg, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginBottom: space.sm }}>
+                <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], ...baseFont }}>
+                  Case 结果：{String(caseReport.case ?? "")}
+                </span>
+                <span style={{
+                  borderRadius: radius.pill, padding: "1px 8px", fontSize: fontSize.xs, fontWeight: 600,
+                  backgroundColor: caseReport.all_pass ? statusColors.success.bg : statusColors.error.bg,
+                  border: `1px solid ${caseReport.all_pass ? statusColors.success.border : statusColors.error.border}`,
+                  color: caseReport.all_pass ? statusColors.success.color : statusColors.error.color,
+                }}>
+                  {caseReport.all_pass ? "PASS" : "FAIL"}
+                </span>
+                <span style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono }}>
+                  通过 {String(caseReport.pass_count ?? 0)} / 失败 {String(caseReport.fail_count ?? 0)}
+                </span>
+              </div>
+              {(caseReport.rows ?? []).map((r, ri) => {
+                const passed = Boolean(r.all_pass);
+                const name = String(r.name ?? "");
+                const http = r.http_method || r.http_path ? `${String(r.http_method ?? "")} ${String(r.http_path ?? "")}`.trim() : "N/A";
+                const fe = Array.isArray(r.flow_errors) ? (r.flow_errors as unknown[]) : [];
+                return (
+                  <div key={ri} style={{ borderTop: `1px solid ${neutral[100]}`, padding: `${space.sm}px 0` }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+                      <span style={{ fontFamily: fontFamily.mono, fontSize: fontSize.xs, color: neutral[700] }}>
+                        {name}
+                      </span>
+                      <span style={{ fontFamily: fontFamily.mono, fontSize: fontSize.xs, color: neutral[400] }}>{http}</span>
+                      <span style={{ fontSize: fontSize.xs, fontWeight: 600, color: passed ? statusColors.success.color : statusColors.error.color }}>
+                        {passed ? "PASS" : "FAIL"}
+                      </span>
+                      {typeof r.elapsed === "number" && (
+                        <span style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}>{r.elapsed.toFixed(3)}s</span>
+                      )}
+                    </div>
+                    {!passed && fe.length > 0 && (
+                      <div style={{ marginTop: space.xs, display: "flex", flexDirection: "column", gap: 2 }}>
+                        {fe.map((e, ei) => (
+                          <span key={ei} style={{ fontFamily: fontFamily.mono, fontSize: fontSize.xs, color: statusColors.error.color, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                            ✗ {String(e)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {cards.length === 0 ? (
             <EmptyState text={executionId ? "等待执行事件…" : "执行命令后此处显示步骤流"} />
           ) : (

@@ -68,21 +68,23 @@ export const accent: { blue: AccentTheme; violet: AccentTheme; emerald: AccentTh
   rose: { text: "#BE123C", bg: "#FFF1F2", line: "#F43F5E" },
 } as const;
 
-/** tab 主题映射：命令=蓝、常用=紫、流程=绿 */
-export const tabAccent: Record<"commands" | "flows" | "favorites", AccentTheme> = {
+/** tab 主题映射：命令=蓝、常用=紫、流程=绿、测试=玫红 */
+export const tabAccent: Record<"commands" | "flows" | "favorites" | "cases", AccentTheme> = {
   commands: accent.blue,
   flows: accent.emerald,
   favorites: accent.violet,
+  cases: accent.rose,
 };
 
 /** tab 顺序数组（渲染用），保持与 tabAccent 一一对应 */
-export const tabOrder = ["commands", "favorites", "flows"] as const;
+export const tabOrder = ["commands", "favorites", "flows", "cases"] as const;
 
 /** tab 显示文本 */
-export const tabLabel: Record<"commands" | "flows" | "favorites", string> = {
+export const tabLabel: Record<"commands" | "flows" | "favorites" | "cases", string> = {
   commands: "命令",
   flows: "流程",
   favorites: "⭐ 常用命令",
+  cases: "🧪 测试",
 };
 
 /* ---------------------------------- 间距（4px 基准） ---------------------------------- */

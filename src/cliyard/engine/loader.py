@@ -26,6 +26,8 @@ from typing import Any
 import yaml
 
 from cliyard.engine.flow import (
+    CaseAssertion,
+    CaseSpec,
     FlowSpec,
     FlowStep,
     ForEachConfig,
@@ -209,6 +211,72 @@ def load_flows(spec_dir: str | Path) -> list[FlowSpec]:
         ))
 
     return flows
+
+
+def load_cases(spec_dir: str | Path) -> list[CaseSpec]:
+    """Load case definitions from a spec directory.
+
+    Unlike :func:`load_flows`, cases are read from a **single** file:
+    ``cases/_cases.yaml``.  There is no index/per-case file split and no
+    ``include:`` recursion.
+
+    The file's top-level ``cases:`` mapping keys are the case names.  Each
+    value must provide a ``flow`` field (the flow command to run).
+
+    Args:
+        spec_dir: Path to the service spec directory.
+
+    Returns:
+        A list of :class:`CaseSpec` objects.  Empty list if the cases file
+        does not exist or has no ``cases:`` key.
+
+    Raises:
+        ValueError: If a case entry is missing its required ``flow`` field.
+    """
+    spec_dir = Path(spec_dir).resolve()
+    cases_path = spec_dir / "cases" / "_cases.yaml"
+
+    if not cases_path.is_file():
+        return []
+
+    raw = _load_yaml(cases_path)
+    raw_cases = raw.get("cases") or {}
+    if not isinstance(raw_cases, dict):
+        return []
+
+    cases: list[CaseSpec] = []
+    for cname, cdict in raw_cases.items():
+        if not isinstance(cdict, dict):
+            continue
+        if "flow" not in cdict:
+            raise ValueError(
+                f"{cases_path}: case '{cname}' is missing required 'flow' field"
+            )
+
+        raw_asserts = cdict.get("assert") or []
+        asserts: list[CaseAssertion] = []
+        for entry in raw_asserts:
+            asserts.append(CaseAssertion(
+                step=entry["step"],
+                jsonpath=entry["jsonpath"],
+                operator=entry["operator"],
+                expected=entry.get("expected"),
+            ))
+
+        cases.append(CaseSpec(
+            name=cname,
+            flow=cdict["flow"],
+            description=cdict.get("description", ""),
+            category=cdict.get("category", ""),
+            category_label=cdict.get("category_label", ""),
+            labels=cdict.get("labels", []),
+            params=cdict.get("params", {}),
+            data=cdict.get("data", []),
+            assert_=asserts,
+            expected_return=bool(cdict.get("expected_return", False)),
+        ))
+
+    return cases
 
 
 def _resolve_steps(

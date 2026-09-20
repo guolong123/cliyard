@@ -46,7 +46,8 @@ from uuid import uuid4
 from anyio.from_thread import run as _from_thread_run
 
 from cliyard.engine.builder import ServiceContext, execute_pipeline
-from cliyard.engine.loader import load_flows, load_service
+from cliyard.engine.case_runner import run_case
+from cliyard.engine.loader import load_cases, load_flows, load_service
 from cliyard.engine.orchestrator import _lookup_resource_method, run_flow
 from cliyard.server.context import build_service_context
 from cliyard.server.history import DEFAULT_HISTORY_DB_PATH, HistoryStore
@@ -88,7 +89,7 @@ class Execution:
 
     id: str
     spec_dir: str
-    kind: str  # "command" | "flow"
+    kind: str  # "command" | "flow" | "case"
     target: str
     params: dict[str, Any]
     status: str  # "running" | "done" | "error"
@@ -291,6 +292,33 @@ class ExecutionManager:
         ).start()
         return execution.id
 
+    def submit_case(
+        self,
+        spec_dir: str,
+        case_name: str,
+        params: dict[str, Any] | None = None,
+    ) -> str:
+        """提交一个 case 执行并返回 ``execution_id``。
+
+        Case 未知时不在提交期抛错——由后台线程查找失败并推送
+        ``{"type": "error"}`` 事件（与未知 flow command 行为一致）。
+
+        Args:
+            spec_dir: Spec 目录。
+            case_name: ``cases/_cases.yaml`` 里的 CaseSpec 名称。
+            params: case 参数（合并到 case.params / data row 之上）。
+
+        Returns:
+            ``execution_id``。
+        """
+        execution = self._create_execution(spec_dir, "case", case_name, params or {})
+        threading.Thread(
+            target=self._run_case,
+            args=(execution, case_name, params or {}),
+            daemon=True,
+        ).start()
+        return execution.id
+
     # ------------------------------------------------------------------
     # 读取 / SSE
     # ------------------------------------------------------------------
@@ -427,6 +455,44 @@ class ExecutionManager:
                 step_cb=lambda name, payload: self._emit(execution, name, payload),
                 console=Console(soft_wrap=True, force_terminal=False, no_color=True, file=io.StringIO()),
                 spec_dir=execution.spec_dir,
+            )
+            execution.status = "done"
+        except Exception as exc:
+            execution.status = "error"
+            self._emit_error(execution, exc, execution.spec_dir)
+        finally:
+            self._finish(execution)
+
+    def _run_case(
+        self,
+        execution: Execution,
+        case_name: str,
+        params: dict[str, Any],
+    ) -> None:
+        """Case 执行线程体：load_case 匹配 → run_case（step_cb 透出事件）。
+
+        step_cb 透传给 ``run_case`` → ``run_flow``，让 SSE / Web / 历史
+        记录的轮询兜底拿到 case 内 flow 的逐步事件。
+        """
+        try:
+            service = load_service(execution.spec_dir)
+            case_spec = next(
+                (c for c in load_cases(execution.spec_dir) if c.name == case_name),
+                None,
+            )
+            if case_spec is None:
+                raise ValueError(
+                    f"Case {case_name!r} not found in spec dir {execution.spec_dir}"
+                )
+            service_ctx = build_service_context(execution.spec_dir, service)
+            run_case(
+                case_spec,
+                execution.spec_dir,
+                service_ctx,
+                service,
+                params_override=params or {},
+                step_cb=lambda name, payload: self._emit(execution, name, payload),
+                console=Console(soft_wrap=True, force_terminal=False, no_color=True, file=io.StringIO()),
             )
             execution.status = "done"
         except Exception as exc:
