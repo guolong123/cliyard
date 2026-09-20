@@ -284,6 +284,37 @@ def _render_output(output_format: str, data: Any, fields: list[dict] | None = No
     return format_as_json(data)
 
 
+def _parse_content_disposition(cd: str) -> str:
+    """Extract the filename from a Content-Disposition header.
+
+    Handles both the plain ``filename=`` form and the RFC 5987 extended form
+    (``filename*=UTF-8''<pct-encoded>``).  The extended form wins when present,
+    matching browser download semantics.  Falls back to ``download`` when the
+    header carries no usable name.  Values are unquoted and percent-decoded.
+    """
+    import re as _re
+    from urllib.parse import unquote
+
+    if not cd:
+        return ""
+
+    # RFC 5987: filename*=charset''<pct-encoded-value> (may repeat per param)
+    ext_match = _re.search(r"filename\*\s*=\s*(?:UTF-8|utf-8)?''([^;]+)", cd, flags=_re.IGNORECASE)
+    if ext_match:
+        name = unquote(ext_match.group(1).strip().strip('"'))
+        return name
+
+    # Plain: filename=value  or  filename="quoted value"
+    plain_match = _re.search(r"filename\s*=\s*\"([^\"]*)\"", cd, flags=_re.IGNORECASE)
+    if plain_match:
+        return plain_match.group(1)
+    plain_match = _re.search(r"filename\s*=\s*([^;]+)", cd, flags=_re.IGNORECASE)
+    if plain_match:
+        return plain_match.group(1).strip().strip("\"'")
+
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Callback factory
 # ---------------------------------------------------------------------------
@@ -565,11 +596,11 @@ def execute_pipeline(
         import re as _re
 
         cd = response.headers.get("Content-Disposition", "")
-        fname = "download"
-        if "filename=" in cd:
-            fname = cd.split("filename=")[1].strip('"\'')
-        elif req.url.rstrip("/").split("/"):
-            fname = req.url.rstrip("/").split("/")[-1]
+        fname = _parse_content_disposition(cd)
+        if not fname:
+            fname = "download"
+            if req.url.rstrip("/").split("/"):
+                fname = req.url.rstrip("/").split("/")[-1]
         ct = response.headers.get("Content-Type", "")
         if "." not in fname:
             ext = _re.sub(r".*/(\w+).*", r"\1", ct)
