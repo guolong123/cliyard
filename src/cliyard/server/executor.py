@@ -485,6 +485,12 @@ class ExecutionManager:
                     f"Case {case_name!r} not found in spec dir {execution.spec_dir}"
                 )
             service_ctx = build_service_context(execution.spec_dir, service)
+            # Case 内 flow 与 flow 路径同源执行：同样 stamp 文件 jail 三件套，
+            # 否则 case 的 file 参数会绕过 path jail（params 可由 /api/execute 覆盖）。
+            if isinstance(service_ctx, ServiceContext):
+                service_ctx.server_mode = True
+                service_ctx.upload_dir = self.server_upload_dir
+                service_ctx.allow_dirs = self.server_allow_dirs
             run_case(
                 case_spec,
                 execution.spec_dir,

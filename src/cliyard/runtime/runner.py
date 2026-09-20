@@ -379,6 +379,7 @@ def create_cli(
         def _run_cases(case_name: str | None, label: str | None, param_args):
             """Run test cases over flows and report pass/fail per assertion."""
             from rich.console import Console
+            from rich.markup import escape
             from rich.table import Table
 
             console = Console()
@@ -429,20 +430,24 @@ def create_cli(
                         result_cell = "[red]ERROR[/red]"
                     else:
                         result_cell = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
-                    table.add_row(case.name, row.get("name") or "", http_desc,
-                                  result_cell, f"{row.get('elapsed', 0.0):.3f}s")
+                    table.add_row(escape(str(case.name)), escape(str(row.get("name") or "")),
+                                  escape(http_desc), result_cell,
+                                  f"{row.get('elapsed', 0.0):.3f}s")
                     if not passed:
                         for apr in row.get("assertions_passed") or []:
                             if not apr.get("passed"):
+                                # escape 动态值：值里的 '[' 否则会被 rich 当 markup 解析
                                 detail = (
-                                    f"  .  {apr.get('step')} {apr.get('jsonpath')} "
-                                    f"{apr.get('operator')} expected={apr.get('expected')!r} "
-                                    f"actual={apr.get('actual')!r}"
+                                    f"  .  {escape(str(apr.get('step')))} "
+                                    f"{escape(str(apr.get('jsonpath')))} "
+                                    f"{escape(str(apr.get('operator')))} "
+                                    f"expected={escape(repr(apr.get('expected')))} "
+                                    f"actual={escape(repr(apr.get('actual')))}"
                                 )
                                 table.add_row("", "", "", detail, "")
                         # Show flow step errors when flow did not complete
                         for ferr in row.get("flow_errors") or []:
-                            table.add_row("", "", "", f"[red]  ✗ {ferr}[/red]", "")
+                            table.add_row("", "", "", f"[red]  ✗ {escape(str(ferr))}[/red]", "")
                 console.print(table)
 
                 if not report["all_pass"]:

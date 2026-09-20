@@ -31,7 +31,7 @@ import click
 from mcp.types import Tool
 
 from cliyard.engine.loader import load_cases
-from cliyard.server.schema_bridge import _file_upload_guide, build_command_tree
+from cliyard.server.schema_bridge import _file_upload_guide, build_command_tree, case_params_schema
 
 logger = logging.getLogger("cliyard.server.mcp")
 
@@ -410,14 +410,12 @@ def build_tool_specs(
     cases = load_cases(spec_dir)
     for case in cases:
         name = f"case.{case.name}"
-        properties = {k: {"type": "string", "default": str(v) if v else ""} for k, v in case.params.items()}
-        input_schema = {"type": "object", "properties": properties, "required": []}
         spec = ToolSpec(
             name=name,
             kind="case",
             target=case.name,
             description=case.description or f"Run case {case.name}",
-            input_schema=input_schema,
+            input_schema=case_params_schema(case.params),
         )
         _register(specs, name, spec)
 

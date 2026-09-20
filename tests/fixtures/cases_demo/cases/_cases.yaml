@@ -18,8 +18,8 @@ cases:
     labels: [csp]
     flow: batch-csp
     data:
-      - company_name: "Rick测试公司"
-        company_id: 8101334
+      - company_name: "示例公司A"
+        company_id: 10001
       - company_name: "测试公司B"
         company_id: 9999
     assert:

@@ -14,23 +14,32 @@ from jsonpath_ng import parse as jp_parse
 from cliyard.engine.flow import CaseAssertion
 
 
-def _extract(jsonpath: str, data: Any):
-    """Extract value(s) via jsonpath-ng. Returns match value or None if no match.
+#: Sentinel returned by :func:`_extract` when a valid JSONPath matches nothing.
+#: Distinguishes "no match" from a literal JSON ``null`` (which extracts as None).
+_MISSING = object()
+
+
+def _extract(jsonpath: str, data: Any) -> Any:
+    """Extract value(s) via jsonpath-ng.
+
+    Returns the matched value, a list of values when multiple nodes match, or
+    the :data:`_MISSING` sentinel when the path is valid but matches nothing.
+    A malformed JSONPath raises ``ValueError`` (instead of being swallowed as
+    "no match"), so reports can tell a bad path from a value mismatch.
 
     Mirrors orchestrator._execute_use_step extract (jsonpath_ng parse + find).
     """
     try:
         expr = jp_parse(jsonpath)
-        matches = expr.find(data)
-        if not matches:
-            return None
-        first = matches[0].value
-        # If multiple matches, return the list of values
-        if len(matches) > 1:
-            return [m.value for m in matches]
-        return first
-    except Exception:
-        return None
+    except Exception as exc:
+        raise ValueError(f"invalid jsonpath {jsonpath!r}: {exc}") from exc
+    matches = expr.find(data)
+    if not matches:
+        return _MISSING
+    # If multiple matches, return the list of values
+    if len(matches) > 1:
+        return [m.value for m in matches]
+    return matches[0].value
 
 
 def evaluate_assertion(
@@ -38,22 +47,25 @@ def evaluate_assertion(
 ) -> tuple[bool, Any]:
     """Evaluate a single assertion against a step result.
 
-    Returns (passed, actual). When the JSONPath yields no match, passed=False
-    (never raises). Operator semantics follow the plan's D11 table:
+    Returns (passed, actual). When the JSONPath yields no match, passed=False.
+    A malformed JSONPath raises ``ValueError``; no-match and value mismatches
+    never raise. Operator semantics follow the plan's D11 table:
       eq       == (no implicit coercion)
       ne       !=
       contains list: in / str: substring / dict: key in
       gt/gte/lt/lte numeric comparison (non-numeric => fail)
       regex    re.fullmatch(expected, str(actual))
-      exists   matches exist (expected is truthy) or not
+      exists   node exists (expected truthy) or not — a literal JSON null
+               counts as existing
     """
     if assertion.operator == "exists":
         actual = _extract(assertion.jsonpath, step_result)
         wanted = bool(assertion.expected)
-        return (actual is not None) == wanted, actual
+        found = actual is not _MISSING
+        return found == wanted, (actual if found else None)
 
     actual = _extract(assertion.jsonpath, step_result)
-    if actual is None:
+    if actual is _MISSING:
         return False, None
 
     op = assertion.operator
