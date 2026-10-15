@@ -184,7 +184,7 @@ def create_cli(
             metavar="N",
             help=(
                 "Truncate output beyond N characters "
-                "(default: $CLIYARD_MAX_OUTPUT_CHARS or 10000)"
+                "(default: $CLIYARD_MAX_OUTPUT_CHARS or 50000)"
             ),
         )
     )

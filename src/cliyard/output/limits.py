@@ -8,7 +8,7 @@ import tempfile
 from typing import Any
 from uuid import uuid4
 
-DEFAULT_MAX_OUTPUT_CHARS = 10000
+DEFAULT_MAX_OUTPUT_CHARS = 50000
 OUTPUT_LIMIT_ENV = "CLIYARD_MAX_OUTPUT_CHARS"
 LOCAL_OVERFLOW_DIR = os.path.join(tempfile.gettempdir(), "cliyard-outputs")
 
