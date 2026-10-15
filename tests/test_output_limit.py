@@ -67,7 +67,7 @@ def test_executor_truncation_writes_overflow_and_url(tmp_path):
     assert parsed["original_chars"] > 10000
     assert parsed["url"].startswith("http://h:1/outputs/")
     assert "⚠" in text
-    ident = parsed["url"].rsplit("/", 1)[1]
+    ident = parsed["url"].split("/outputs/", 1)[1].split("?", 1)[0]
     assert os.path.isfile(os.path.join(str(tmp_path), ident))
 
 
@@ -83,6 +83,7 @@ def _fake_request(upload_dir, ident, token=None, headers=None):
         app=SimpleNamespace(state=state),
         path_params={"id": ident},
         headers=headers or {},
+        query_params={},
     )
 
 
@@ -167,3 +168,65 @@ def test_summarize_groups_and_distribution():
     assert out["summary"]["total"] == 3
     assert out["groups"]["index"] == {"a": 2, "b": 1}
     assert out["summary"]["distribution"] == {"STARTED": 2, "RELOCATING": 1}
+
+
+def test_output_token_valid_expired_tampered(monkeypatch):
+    from cliyard.server.api.output_tokens import sign_output_token, verify_output_token
+
+    monkeypatch.setenv("KETACLI_MCP_TOKEN", "abc")
+    good = sign_output_token("file.json", 300)
+    assert verify_output_token("file.json", good) is True
+    expired = sign_output_token("file.json", -5)
+    assert verify_output_token("file.json", expired) is False
+    expiry, _, sig = good.partition(".")
+    assert verify_output_token("file.json", f"{expiry}.{'0' * len(sig)}") is False
+    assert verify_output_token("other.json", good) is False
+
+
+def test_outputs_endpoint_query_token(tmp_path):
+    import os
+
+    from cliyard.server.api.output_tokens import sign_output_token
+    from cliyard.server.api.outputs import mcp_output_endpoint
+
+    (tmp_path / "f.json").write_text("{}", encoding="utf-8")
+    good = sign_output_token("f.json")
+    req = _fake_request(tmp_path, "f.json", token="secret")
+    req.query_params = {"t": good}
+    assert asyncio.run(mcp_output_endpoint(req)).__class__.__name__ == "FileResponse"
+    req_bad = _fake_request(tmp_path, "f.json", token="secret")
+    req_bad.query_params = {"t": "1.deadbeef"}
+    assert asyncio.run(mcp_output_endpoint(req_bad)).status_code == 401
+    req_header = _fake_request(
+        tmp_path, "f.json", token="secret", headers={"authorization": "Bearer secret"}
+    )
+    req_header.query_params = {}
+    assert asyncio.run(mcp_output_endpoint(req_header)).__class__.__name__ == "FileResponse"
+
+
+def test_local_overflow_sweep(tmp_path, monkeypatch):
+    import os
+    import time
+
+    monkeypatch.setenv("CLIYARD_OUTPUT_TTL_S", "1")
+    old = tmp_path / "cliyard-output-old00000.json"
+    old.write_text("x", encoding="utf-8")
+    past = time.time() - 3600
+    os.utime(old, (past, past))
+    new = write_local_overflow("fresh", str(tmp_path))
+    assert not old.exists()
+    assert os.path.isfile(new)
+
+
+def test_outputs_endpoint_sweeps_expired_upload(tmp_path):
+    import os
+    import time
+
+    from cliyard.server.api.outputs import mcp_output_endpoint
+
+    stale = tmp_path / "cliyard-upload-deadbeef-output.json"
+    stale.write_text("{}", encoding="utf-8")
+    past = time.time() - 7200
+    os.utime(stale, (past, past))
+    asyncio.run(mcp_output_endpoint(_fake_request(tmp_path, "cliyard-upload-deadbeef-output.json")))
+    assert not stale.exists()

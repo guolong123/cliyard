@@ -537,13 +537,23 @@ class MCPExecutor:
                 sweep(self.upload_dir)
                 saved = save_output_text(text, self.upload_dir)
                 if self.output_base:
-                    url = f"{self.output_base.rstrip('/')}/outputs/{saved['file_name']}"
+                    from cliyard.server.api.output_tokens import output_url
+
+                    url = output_url(self.output_base, saved["file_name"])
                 else:
                     file_path = saved.get("path")
             except Exception:
                 logger.warning("output overflow handoff failed", exc_info=True)
+            auth_hint = (
+                {
+                    "header": "Authorization: Bearer <KETACLI_MCP_TOKEN>",
+                    "env": "KETACLI_MCP_TOKEN",
+                }
+                if url
+                else None
+            )
             rendered, notice = truncate_text(
-                text, limit, file=file_path, url=url, json_safe=True
+                text, limit, file=file_path, url=url, json_safe=True, auth=auth_hint
             )
             if notice is not None:
                 rendered = f"{rendered}\n{human_warning(notice)}"
