@@ -629,6 +629,10 @@ def execute_pipeline(
 
         data = parse_response(resp_data, output_spec)
 
+        from cliyard.output.pagination import apply_output_transforms
+
+        data = apply_output_transforms(data, output_spec, kwargs)
+
         _fmt_hooks = hooks_config.get("before-format", [])
         if _fmt_hooks:
             data = run_post_response_hooks(_fmt_hooks, data)
@@ -770,24 +774,44 @@ def _make_callback(
             output_spec: dict[str, Any] = method_spec.get("output", {})
             items = data.get("items") if isinstance(data, dict) else None
 
+            _max_chars = (ctx.find_root().obj or {}).get("max_output_chars")
+
+            def _emit(
+                out_format: str, payload: Any, fields_list: list | None = None
+            ) -> None:
+                rendered = _render_output(out_format, payload, fields_list or [])
+                if isinstance(rendered, str):
+                    from cliyard.output.limits import (
+                        human_warning,
+                        resolve_max_chars,
+                        truncate_text,
+                        write_local_overflow,
+                    )
+
+                    limit = resolve_max_chars(_max_chars)
+                    if len(rendered) > limit:
+                        path = write_local_overflow(rendered)
+                        rendered, notice = truncate_text(
+                            rendered,
+                            limit,
+                            file=path,
+                            json_safe=out_format in ("json", "yaml"),
+                        )
+                        console.print(rendered, markup=False)
+                        if notice is not None:
+                            click.echo(human_warning(notice), err=True)
+                        return
+                console.print(rendered, markup=False)
+
             if items is not None and len(items) == 0:
                 if output_format == "table":
                     console.print("[yellow]No results found.[/yellow]")
                 else:
-                    console.print(
-                        _render_output(output_format, data, output_spec.get("fields", [])),
-                        markup=False,
-                    )
+                    _emit(output_format, data, output_spec.get("fields", []))
             elif items:
-                console.print(
-                    _render_output(output_format, data, output_spec.get("fields", [])),
-                    markup=False,
-                )
+                _emit(output_format, data, output_spec.get("fields", []))
             elif output_spec.get("items_path"):
-                console.print(
-                    _render_output(output_format, data, output_spec.get("fields", [])),
-                    markup=False,
-                )
+                _emit(output_format, data, output_spec.get("fields", []))
             else:
                 if isinstance(data, list) and data:
                     fields = [{"name": k, "alias": k} for k in data[0]]
@@ -795,7 +819,7 @@ def _make_callback(
                 else:
                     fields = [{"name": k, "alias": k} for k in data[0]] if isinstance(data, list) and data else []
                     rows = {"items": data if isinstance(data, list) else [data], "total": 0, "fields": fields}
-                console.print(_render_output(output_format, rows, fields), markup=False)
+                _emit(output_format, rows, fields)
 
         except CliyError as e:
             console.print(f"[red]Error:[/red] {str(e).replace('[', '[[]').replace(']', '[]]')}")
@@ -879,7 +903,7 @@ def build_list_command(resource_spec: dict[str, Any], ctx: ServiceContext) -> cl
     click_params: list[click.Parameter] = []
 
     # Body / Query / Header params → options (with argument support)
-    for _loc in ("body", "query", "header"):
+    for _loc in ("body", "query", "header", "local"):
         for param in params_spec.get(_loc, []):
             if param.get("argument"):
                 click_params.append(_param_to_argument(param))
@@ -925,7 +949,7 @@ def build_operation_command(
     click_params: list[click.Parameter] = []
 
     # Collect all params that should be Click arguments
-    for _loc in ("body", "query", "header"):
+    for _loc in ("body", "query", "header", "local"):
         for param in params_spec.get(_loc, []):
             if param.get("argument"):
                 click_params.append(_param_to_argument(param))

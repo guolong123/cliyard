@@ -81,6 +81,15 @@ _OPT_FILE_ALLOW_DIRS = click.option(
     metavar="DIR",
     help="Extra server-readable directories (repeatable)",
 )
+_OPT_OUTPUT_BASE_URL = click.option(
+    "--output-base-url",
+    default=None,
+    metavar="URL",
+    help=(
+        "Public base URL for truncated-output download links "
+        "(default: http://<host>:<port>)"
+    ),
+)
 _OPT_MCP_TOOL_MODE = click.option(
     "--mcp-tool-mode",
     type=click.Choice(["flat", "grouped", "discover"]),
@@ -101,6 +110,7 @@ def _apply_options(f: Callable[..., Any]) -> Callable[..., Any]:
     transport，即 transport 在最外层。
     """
     f = _OPT_MCP_TOOL_MODE(f)
+    f = _OPT_OUTPUT_BASE_URL(f)
     f = _OPT_FILE_ALLOW_DIRS(f)
     f = _OPT_UPLOAD_BASE_URL(f)
     f = _OPT_UPLOAD_DIR(f)

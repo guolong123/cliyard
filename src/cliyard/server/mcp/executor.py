@@ -89,6 +89,7 @@ class MCPExecutor:
         upload_dir: str | None = None,
         file_allow_dirs: tuple[str, ...] | list[str] | None = None,
         tool_mode: str = "flat",
+        output_base: str | None = None,
     ) -> None:
         self.spec_dir: str = str(Path(spec_dir).resolve())
         self.server_override = server_override
@@ -97,6 +98,7 @@ class MCPExecutor:
         self.upload_dir = upload_dir
         self.file_allow_dirs: tuple[str, ...] = tuple(file_allow_dirs or ())
         self.tool_mode = tool_mode
+        self.output_base = output_base
         _spec_kwargs: dict[str, Any] = {"upload_base": upload_base, "transport": transport}
         # todo 1（`build_tool_specs(mode=...)`）尚未落地时的兼容：callee 无
         # `mode` 形参则暂存不传（`self.tool_mode` 仍可查），落地后自动透传。
@@ -512,7 +514,52 @@ class MCPExecutor:
                 content=[TextContent(type="text", text=text)],
                 is_error=True,
             )
-        return CallToolResult(content=[TextContent(type="text", text=_render_result(result))])
+        return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result))])
+
+    def _limit_result(self, result: Any) -> str:
+        """Apply the output size guard; overflow goes to the shared upload store."""
+        text = _render_result(result)
+        try:
+            from cliyard.output.limits import (
+                human_warning,
+                resolve_max_chars,
+                truncate_text,
+            )
+
+            limit = resolve_max_chars()
+            if len(text) <= limit:
+                return text
+            file_path: str | None = None
+            url: str | None = None
+            try:
+                from cliyard.server.uploads import save_output_text, sweep
+
+                sweep(self.upload_dir)
+                saved = save_output_text(text, self.upload_dir)
+                if self.output_base:
+                    from cliyard.server.api.output_tokens import output_url
+
+                    url = output_url(self.output_base, saved["file_name"])
+                else:
+                    file_path = saved.get("path")
+            except Exception:
+                logger.warning("output overflow handoff failed", exc_info=True)
+            auth_hint = (
+                {
+                    "header": "Authorization: Bearer <KETACLI_MCP_TOKEN>",
+                    "env": "KETACLI_MCP_TOKEN",
+                }
+                if url
+                else None
+            )
+            rendered, notice = truncate_text(
+                text, limit, file=file_path, url=url, json_safe=True, auth=auth_hint
+            )
+            if notice is not None:
+                rendered = f"{rendered}\n{human_warning(notice)}"
+            return rendered
+        except Exception:
+            return text
 
     # ------------------------------------------------------------------
     # 低层 MCP Server 构造
