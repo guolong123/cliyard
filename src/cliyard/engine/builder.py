@@ -743,11 +743,20 @@ def _make_callback(
                 if output_format == "table":
                     console.print("[yellow]No results found.[/yellow]")
                 else:
-                    console.print(_render_output(output_format, data, output_spec.get("fields", [])))
+                    console.print(
+                        _render_output(output_format, data, output_spec.get("fields", [])),
+                        markup=False,
+                    )
             elif items:
-                console.print(_render_output(output_format, data, output_spec.get("fields", [])))
+                console.print(
+                    _render_output(output_format, data, output_spec.get("fields", [])),
+                    markup=False,
+                )
             elif output_spec.get("items_path"):
-                console.print(_render_output(output_format, data, output_spec.get("fields", [])))
+                console.print(
+                    _render_output(output_format, data, output_spec.get("fields", [])),
+                    markup=False,
+                )
             else:
                 if isinstance(data, list) and data:
                     fields = [{"name": k, "alias": k} for k in data[0]]
@@ -755,7 +764,7 @@ def _make_callback(
                 else:
                     fields = [{"name": k, "alias": k} for k in data[0]] if isinstance(data, list) and data else []
                     rows = {"items": data if isinstance(data, list) else [data], "total": 0, "fields": fields}
-                console.print(_render_output(output_format, rows, fields))
+                console.print(_render_output(output_format, rows, fields), markup=False)
 
         except CliyError as e:
             console.print(f"[red]Error:[/red] {str(e).replace('[', '[[]').replace(']', '[]]')}")
