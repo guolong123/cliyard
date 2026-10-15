@@ -176,11 +176,27 @@ def create_cli(
             help="Override server base URL (default: $CLIYARD_SERVER or spec base_url)",
         )
     )
+    cli.params.append(
+        click.Option(
+            ["--max-output-chars"],
+            type=int,
+            default=None,
+            metavar="N",
+            help=(
+                "Truncate output beyond N characters "
+                "(default: $CLIYARD_MAX_OUTPUT_CHARS or 10000)"
+            ),
+        )
+    )
 
     @click.pass_context
-    def _root_callback(ctx: click.Context, server: str | None) -> None:
+    def _root_callback(
+        ctx: click.Context, server: str | None, max_output_chars: int | None
+    ) -> None:
         if server:
             ctx.ensure_object(dict)["server"] = server
+        if max_output_chars is not None:
+            ctx.ensure_object(dict)["max_output_chars"] = max_output_chars
 
     cli.callback = _root_callback
 

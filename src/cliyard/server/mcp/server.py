@@ -99,6 +99,7 @@ def create_mcp_server(
     upload_dir: str | None = None,
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     tool_mode: str = "flat",
+    output_base: str | None = None,
 ) -> MCPServer:
     """构建 spec 对应的低层 MCP Server（工具动态注册自命令树）。
 
@@ -126,6 +127,7 @@ def create_mcp_server(
         upload_dir=upload_dir,
         file_allow_dirs=file_allow_dirs,
         tool_mode=tool_mode,
+        output_base=output_base,
     )
     return executor.to_mcp_server(name=name, version=version)
 
@@ -142,6 +144,7 @@ def build_mcp_http_app(
     upload_dir: str | None = None,
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     tool_mode: str = "flat",
+    output_base: str | None = None,
 ):
     """构建 Streamable HTTP 的 Starlette app（独立 uvicorn 启动用）.
 
@@ -163,6 +166,7 @@ def build_mcp_http_app(
         upload_dir=upload_dir,
         file_allow_dirs=file_allow_dirs,
         tool_mode=tool_mode,
+        output_base=output_base,
     )
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
     transport_security = _transport_security_for(host)
@@ -173,6 +177,7 @@ def build_mcp_http_app(
         kwargs["token_verifier"] = _StaticTokenVerifier(token)
     app = server.streamable_http_app(**kwargs)
     _mount_upload_route(app, token=token, upload_base=upload_base, upload_dir=upload_dir)
+    _mount_outputs_route(app, output_base=output_base)
     return app
 
 
@@ -193,6 +198,16 @@ def _mount_upload_route(
     app.routes.append(Route(path="/upload", endpoint=mcp_upload_endpoint, methods=["POST"]))
 
 
+def _mount_outputs_route(app, *, output_base: str | None) -> None:
+    """挂载 ``GET /outputs/<id>``（截断溢出内容回取；鉴权同 upload）。"""
+    from cliyard.server.api.outputs import mcp_output_endpoint
+
+    app.state.output_base_url = output_base
+    app.routes.append(
+        Route(path="/outputs/{id}", endpoint=mcp_output_endpoint, methods=["GET"])
+    )
+
+
 def mount_mcp_http(
     app,
     spec_dir: str | Path,
@@ -206,6 +221,7 @@ def mount_mcp_http(
     upload_dir: str | None = None,
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     tool_mode: str = "flat",
+    output_base: str | None = None,
 ) -> MCPServer:
     """把 MCP Streamable HTTP 挂载进现有 FastAPI serve（同一端口/uvicorn）。
 
@@ -230,6 +246,7 @@ def mount_mcp_http(
         file_allow_dirs=file_allow_dirs,
         transport="http",
         tool_mode=tool_mode,
+        output_base=output_base,
     )
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
     transport_security = _transport_security_for(host)
@@ -248,6 +265,10 @@ def mount_mcp_http(
     from cliyard.server.api.upload import mcp_upload_endpoint
 
     app.router.routes.insert(0, Route(path="/upload", endpoint=mcp_upload_endpoint, methods=["POST"]))
+    from cliyard.server.api.outputs import mcp_output_endpoint
+
+    app.router.routes.insert(0, Route(path="/outputs/{id}", endpoint=mcp_output_endpoint, methods=["GET"]))
+    app.state.output_base_url = output_base
     if upload_base is not None:
         app.state.upload_base = upload_base
     if upload_dir is not None:
@@ -287,6 +308,7 @@ def run_mcp_stdio(
     upload_dir: str | None = None,
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     tool_mode: str = "flat",
+    output_base: str | None = None,
 ) -> None:
     """以 stdio transport 启动 MCP Server（阻塞直到客户端断开）。
 
@@ -300,6 +322,7 @@ def run_mcp_stdio(
         upload_dir=upload_dir,
         file_allow_dirs=file_allow_dirs,
         tool_mode=tool_mode,
+        output_base=output_base,
     )
     click.echo(f"MCP (stdio) serving spec {Path(spec_dir).resolve()}", err=True)
     asyncio.run(_serve_stdio(server))
@@ -332,6 +355,7 @@ def run_mcp_server(
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     version: str = "0.12.1",
     tool_mode: str = "flat",
+    output_base_url: str | None = None,
 ) -> None:
     """启动 MCP Server。
 
@@ -379,6 +403,7 @@ def run_mcp_server(
         upload_dir=resolved_upload_dir,
         file_allow_dirs=file_allow_dirs,
         tool_mode=tool_mode,
+        output_base=output_base_url or f"http://{display_host(host)}:{port}",
     )
     url = f"http://{display_host(host)}:{port}/mcp"
     click.echo(f"MCP (Streamable HTTP) serving spec {Path(spec_dir).resolve()} at {url}")
