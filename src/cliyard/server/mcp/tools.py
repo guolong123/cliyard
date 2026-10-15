@@ -370,21 +370,25 @@ def build_tool_specs(
             模板；缺省 ``None`` → 占位地址 + 一句配置提示）。
         transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板；
             ``"stdio"`` 追加同机 ``file_path`` 段）。
-        mode: ``"flat"``（缺省，与改动前逐 key 一致，每 method 一工具）或
+        mode: ``"flat"``（缺省，与改动前逐 key 一致，每 method 一工具）、
             ``"grouped"``（每 resource 一工具，``operation`` 枚举选方法；
-            flow 透传，``cmd.*`` 按顶层命名空间分组）。
+            flow 透传，``cmd.*`` 按顶层命名空间分组）或 ``"discover"``
+            （仅返回常驻元工具 search/describe/call/catalog）。
 
     Returns:
         ``{tool_name: ToolSpec}``，工具名与 /api/execute target 对齐。
 
     Raises:
         FileNotFoundError: spec_dir 缺 _auth.yaml 时由 build_command_tree 抛出。
-        ValueError: ``mode`` 非 ``"flat"`` / ``"grouped"``。
+        ValueError: ``mode`` 非 ``"flat"`` / ``"grouped"`` / ``"discover"``。
     """
-    if mode not in ("flat", "grouped"):
+    if mode not in ("flat", "grouped", "discover"):
         raise ValueError(
-            f"unknown MCP tool mode {mode!r} (expected 'flat' or 'grouped')"
+            f"unknown MCP tool mode {mode!r} "
+            "(expected 'flat', 'grouped' or 'discover')"
         )
+    if mode == "discover":
+        return build_discover_tool_specs()
     tree = build_command_tree(spec_dir, upload_base=upload_base, transport=transport)
     specs: dict[str, ToolSpec] = {}
 
@@ -697,3 +701,147 @@ def build_plugin_tool_specs(
             f"unknown MCP tool mode {mode!r} (expected 'flat' or 'grouped')"
         )
     return _group_plugin_tool_specs(specs)
+
+
+# ---------------------------------------------------------------------------
+# discover 模式：常驻元工具 + 隐藏全量 catalog
+# ---------------------------------------------------------------------------
+
+DISCOVER_TOOL_NAMES = ("search", "describe", "call", "catalog")
+
+_DISCOVER_SEARCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": (
+                "关键词或自然语言（中英文均可），匹配工具名与描述"
+            ),
+        },
+        "limit": {"type": "integer", "default": 10, "description": "最大返回条数"},
+    },
+    "required": ["query"],
+}
+
+_DISCOVER_DESCRIBE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": "search/catalog 返回的精确工具名"}
+    },
+    "required": ["name"],
+}
+
+_DISCOVER_CALL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": "要执行的精确工具名"},
+        "arguments": {
+            "type": "object",
+            "description": "与 describe 返回的 input_schema 对齐的参数对象",
+        },
+    },
+    "required": ["name"],
+}
+
+_DISCOVER_CATALOG_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "description": "可选：按工具名子串过滤"}
+    },
+    "required": [],
+}
+
+
+def short_tool_desc(text: str) -> str:
+    """取工具描述首句（供 search/catalog 精简展示）。"""
+    desc = (text or "").strip()
+    if not desc:
+        return ""
+    return re.split(r"[。\n.!?！？；;]+", desc)[0].strip()
+
+
+def build_discover_tool_specs() -> dict[str, ToolSpec]:
+    """构造 discover 模式的常驻元工具表（search / describe / call / catalog）。"""
+    return {
+        "search": ToolSpec(
+            name="search",
+            kind="discover_search",
+            target="search",
+            description=(
+                "按中英文关键词检索隐藏工具库，返回命中的工具名与一句话描述；"
+                "再用 describe 取 schema、用 call 执行"
+            ),
+            input_schema=dict(_DISCOVER_SEARCH_SCHEMA),
+        ),
+        "describe": ToolSpec(
+            name="describe",
+            kind="discover_describe",
+            target="describe",
+            description=(
+                "按工具名返回完整工具定义（description + input_schema），"
+                "与 flat 模式注册逐字节一致"
+            ),
+            input_schema=dict(_DISCOVER_DESCRIBE_SCHEMA),
+        ),
+        "call": ToolSpec(
+            name="call",
+            kind="discover_call",
+            target="call",
+            description=(
+                "按工具名执行任意 catalog 工具，参数与直接调用语义/鉴权/错误一致"
+            ),
+            input_schema=dict(_DISCOVER_CALL_SCHEMA),
+        ),
+        "catalog": ToolSpec(
+            name="catalog",
+            kind="discover_catalog",
+            target="catalog",
+            description="列出隐藏工具库的全部工具名（可选子串过滤）",
+            input_schema=dict(_DISCOVER_CATALOG_SCHEMA),
+        ),
+    }
+
+
+def build_discover_catalog(
+    spec_dir: str | Path,
+    *,
+    upload_base: str | None = None,
+    transport: str = "http",
+) -> dict[str, ToolSpec]:
+    """构建 discover 模式的隐藏全量 catalog（等价 flat 注册，含命令插件）。"""
+    return build_tool_specs(
+        spec_dir, upload_base=upload_base, transport=transport, mode="flat"
+    )
+
+
+def search_catalog(
+    catalog: dict[str, ToolSpec], query: str, limit: int = 10
+) -> list[dict[str, Any]]:
+    """在 catalog 上做关键词排序检索，返回 ``[{name, description}]``。
+
+    名称命中权重高于描述命中；整串与分词命中叠加计分，按分数降序、名称升序。
+    """
+    raw = (query or "").strip()
+    whole = raw.lower()
+    tokens = [t.lower() for t in re.split(r"[\s,，/|；;:：]+", raw) if t]
+    scored: list[tuple[float, str, ToolSpec]] = []
+    for name, spec in catalog.items():
+        hay_name = name.lower()
+        hay_desc = (spec.description or "").lower()
+        score = 0.0
+        if whole and whole in hay_name:
+            score += 5.0
+        if whole and whole in hay_desc:
+            score += 2.0
+        for token in tokens:
+            if token in hay_name:
+                score += 3.0
+            if token in hay_desc:
+                score += 1.0
+        if score > 0:
+            scored.append((score, name, spec))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [
+        {"name": name, "description": short_tool_desc(spec.description)}
+        for _score, name, spec in scored[: max(1, int(limit or 10))]
+    ]
