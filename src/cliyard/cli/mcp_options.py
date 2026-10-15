@@ -83,10 +83,13 @@ _OPT_FILE_ALLOW_DIRS = click.option(
 )
 _OPT_MCP_TOOL_MODE = click.option(
     "--mcp-tool-mode",
-    type=click.Choice(["flat", "grouped"]),
+    type=click.Choice(["flat", "grouped", "discover"]),
     default="flat",
     show_default=True,
-    help="MCP tool layout: flat (one tool per method) or grouped (one tool per resource)",
+    help=(
+        "MCP tool layout: flat (one tool per method), grouped (one tool per "
+        "resource) or discover (search/describe/call meta-tools)"
+    ),
 )
 
 

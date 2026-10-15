@@ -41,7 +41,13 @@ from cliyard.server.executor import _sanitize_error, execution_manager
 from cliyard.server.redact import redact_sensitive
 from cliyard.server.uploads import redact_upload_path, sweep as _sweep_uploads
 
-from cliyard.server.mcp.tools import ToolSpec, build_plugin_tool_specs, build_tool_specs
+from cliyard.server.mcp.tools import (
+    ToolSpec,
+    build_plugin_tool_specs,
+    build_tool_specs,
+    search_catalog,
+    short_tool_desc,
+)
 
 logger = logging.getLogger("cliyard.server.mcp")
 
@@ -67,8 +73,10 @@ class MCPExecutor:
         transport: ``"http"`` 或 ``"stdio"``（透传给 file 参数描述模板）。
         upload_dir: 上传目录（path jail 根；``None`` → 默认上传目录）。
         file_allow_dirs: 额外可读目录（``--file-allow-dirs``，path jail 放行）。
-        tool_mode: ``"flat"``（每方法一工具，默认）或 ``"grouped"``
-            （每资源一工具；严格透传给 ``build_tool_specs``，不做值校验）。
+        tool_mode: ``"flat"``（每方法一工具，默认）、``"grouped"``（每资源一
+            工具；严格透传给 ``build_tool_specs``，不做值校验）或
+            ``"discover"``（仅暴露 search/describe/call/catalog 元工具，
+            全量工具存于隐藏 catalog 按需展开）。
     """
 
     def __init__(
@@ -94,13 +102,23 @@ class MCPExecutor:
         # `mode` 形参则暂存不传（`self.tool_mode` 仍可查），落地后自动透传。
         if "mode" in inspect.signature(build_tool_specs).parameters:
             _spec_kwargs["mode"] = tool_mode
-        self._tool_specs: dict[str, ToolSpec] = build_tool_specs(
-            self.spec_dir, **_spec_kwargs
-        )
-        # 命令级插件（@register_command）→ cmd.<command> 工具（flat）或
-        # cmd.<ns> 分组工具（grouped；与 build_tool_specs 内合并同 mode，
-        # 否则扁平 cmd.* 会泄漏进分组表，同名单件还会覆盖掉分组工具）
-        self._tool_specs.update(build_plugin_tool_specs(self.spec_dir, mode=self.tool_mode))
+        if self.tool_mode == "discover":
+            self._catalog: dict[str, ToolSpec] = build_tool_specs(
+                self.spec_dir,
+                upload_base=upload_base,
+                transport=transport,
+                mode="flat",
+            )
+            self._tool_specs = build_tool_specs(self.spec_dir, **_spec_kwargs)
+        else:
+            self._catalog = {}
+            self._tool_specs = build_tool_specs(self.spec_dir, **_spec_kwargs)
+            # 命令级插件（@register_command）→ cmd.<command> 工具（flat）或
+            # cmd.<ns> 分组工具（grouped；与 build_tool_specs 内合并同 mode，
+            # 否则扁平 cmd.* 会泄漏进分组表，同名单件还会覆盖掉分组工具）
+            self._tool_specs.update(
+                build_plugin_tool_specs(self.spec_dir, mode=self.tool_mode)
+            )
         self._service: dict[str, Any] | None = None
         self._flows: list[Any] | None = None
 
@@ -368,7 +386,15 @@ class MCPExecutor:
         ]
 
     def execute_spec(self, spec: ToolSpec, arguments: dict[str, Any]) -> Any:
-        """按 ToolSpec 分派执行（command / flow / plugin / case / grouped）。"""
+        """按 ToolSpec 分派执行（command / flow / plugin / case / grouped / discover）。"""
+        if spec.kind == "discover_search":
+            return self._discover_search(arguments)
+        if spec.kind == "discover_describe":
+            return self._discover_describe(arguments)
+        if spec.kind == "discover_call":
+            return self._discover_call(arguments)
+        if spec.kind == "discover_catalog":
+            return self._discover_catalog(arguments)
         if spec.kind == "case":
             return self.execute_case(spec.target, arguments)
         if spec.kind == "case_list":
@@ -399,6 +425,51 @@ class MCPExecutor:
                 )
             return self.execute_spec(original, args)
         return self.execute_command(spec.target, arguments)
+
+    def _discover_search(self, arguments: dict[str, Any]) -> Any:
+        query = str((arguments or {}).get("query") or "")
+        try:
+            limit = int((arguments or {}).get("limit", 10))
+        except (TypeError, ValueError):
+            limit = 10
+        results = search_catalog(self._catalog, query, limit)
+        return {"query": query, "count": len(results), "results": results}
+
+    def _discover_describe(self, arguments: dict[str, Any]) -> Any:
+        name = str((arguments or {}).get("name") or "")
+        spec = self._catalog.get(name)
+        if spec is None:
+            raise ValueError(
+                f"Unknown tool {name!r}; use 'search' or 'catalog' to find names"
+            )
+        tool = spec.as_tool()
+        return {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.input_schema,
+        }
+
+    def _discover_call(self, arguments: dict[str, Any]) -> Any:
+        args = dict(arguments or {})
+        name = str(args.pop("name", "") or "")
+        call_args = args.get("arguments") or {}
+        if not isinstance(call_args, dict):
+            raise ValueError("'arguments' must be an object")
+        spec = self._catalog.get(name)
+        if spec is None:
+            raise ValueError(
+                f"Unknown tool {name!r}; use 'search' or 'catalog' to find names"
+            )
+        return self.execute_spec(spec, call_args)
+
+    def _discover_catalog(self, arguments: dict[str, Any]) -> Any:
+        needle = str((arguments or {}).get("query") or "").lower()
+        tools = [
+            {"name": name, "description": short_tool_desc(spec.description)}
+            for name, spec in self._catalog.items()
+            if not needle or needle in name.lower()
+        ]
+        return {"count": len(tools), "tools": tools}
 
     # ------------------------------------------------------------------
     # MCP 回调（async；同步内核在线程池中执行）
