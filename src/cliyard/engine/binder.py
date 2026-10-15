@@ -28,7 +28,7 @@ from cliyard.validate.types import (
     validate_field,
 )
 
-_LOCATIONS = ("argument", "path", "query", "header", "body")
+_LOCATIONS = ("argument", "path", "query", "header", "body", "local")
 
 
 def _norm_param_name(name: str) -> str:
@@ -60,6 +60,7 @@ class ValidatedParams:
     query: dict[str, Any] = field(default_factory=dict)
     header: dict[str, Any] = field(default_factory=dict)
     body: dict[str, Any] = field(default_factory=dict)
+    local: dict[str, Any] = field(default_factory=dict)
 
 
 def bind_and_validate(kwargs: dict[str, Any], method_spec: dict[str, Any]) -> ValidatedParams:

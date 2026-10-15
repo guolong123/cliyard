@@ -532,18 +532,16 @@ class MCPExecutor:
             file_path: str | None = None
             url: str | None = None
             try:
-                from cliyard.server.uploads import save_upload, sweep
+                from cliyard.server.uploads import save_output_text, sweep
 
                 sweep(self.upload_dir)
-                saved = save_upload(
-                    "output.json", text.encode("utf-8"), self.upload_dir
-                )
+                saved = save_output_text(text, self.upload_dir)
                 if self.output_base:
                     url = f"{self.output_base.rstrip('/')}/outputs/{saved['file_name']}"
                 else:
                     file_path = saved.get("path")
             except Exception:
-                pass
+                logger.warning("output overflow handoff failed", exc_info=True)
             rendered, notice = truncate_text(
                 text, limit, file=file_path, url=url, json_safe=True
             )

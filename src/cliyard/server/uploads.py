@@ -521,3 +521,31 @@ __all__ = [
     "normalize_bypass",
     "redact_upload_path",
 ]
+
+
+def save_output_text(text: str, upload_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    """保存输出溢出内容（复用上传目录/前缀，受 sweep TTL 清理；不受上传大小上限约束）。"""
+    payload = text.encode("utf-8")
+    resolved_dir = _resolve_dir(upload_dir)
+    try:
+        os.makedirs(resolved_dir, exist_ok=True)
+    except OSError as exc:
+        raise CliyError(f"输出溢出目录不可写：{resolved_dir}：{exc}") from exc
+    for _ in range(5):
+        server_name = f"{UPLOAD_FILENAME_PREFIX}{uuid4().hex[:8]}-output.json"
+        dest = os.path.join(resolved_dir, server_name)
+        try:
+            fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(payload)
+        except OSError as exc:
+            try:
+                os.unlink(dest)
+            except OSError:
+                pass
+            raise CliyError(f"输出溢出落盘失败：{exc}") from exc
+        return {"path": dest, "file_name": server_name, "bytes": len(payload)}
+    raise CliyError("无法创建输出溢出文件（重名重试耗尽）")

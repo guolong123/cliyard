@@ -903,7 +903,7 @@ def build_list_command(resource_spec: dict[str, Any], ctx: ServiceContext) -> cl
     click_params: list[click.Parameter] = []
 
     # Body / Query / Header params → options (with argument support)
-    for _loc in ("body", "query", "header"):
+    for _loc in ("body", "query", "header", "local"):
         for param in params_spec.get(_loc, []):
             if param.get("argument"):
                 click_params.append(_param_to_argument(param))
@@ -949,7 +949,7 @@ def build_operation_command(
     click_params: list[click.Parameter] = []
 
     # Collect all params that should be Click arguments
-    for _loc in ("body", "query", "header"):
+    for _loc in ("body", "query", "header", "local"):
         for param in params_spec.get(_loc, []):
             if param.get("argument"):
                 click_params.append(_param_to_argument(param))
