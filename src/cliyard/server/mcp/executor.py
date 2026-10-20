@@ -531,6 +531,7 @@ class MCPExecutor:
                 return text
             file_path: str | None = None
             url: str | None = None
+            overflow_error: str | None = None
             try:
                 from cliyard.server.uploads import save_output_text, sweep
 
@@ -542,7 +543,8 @@ class MCPExecutor:
                     url = output_url(self.output_base, saved["file_name"])
                 else:
                     file_path = saved.get("path")
-            except Exception:
+            except Exception as exc:
+                overflow_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("output overflow handoff failed", exc_info=True)
             auth_hint = (
                 {
@@ -556,6 +558,9 @@ class MCPExecutor:
                 text, limit, file=file_path, url=url, json_safe=True, auth=auth_hint
             )
             if notice is not None:
+                if overflow_error:
+                    notice["overflow_error"] = overflow_error
+                    rendered = json.dumps(notice, ensure_ascii=False, indent=2)
                 rendered = f"{rendered}\n{human_warning(notice)}"
             return rendered
         except Exception:
