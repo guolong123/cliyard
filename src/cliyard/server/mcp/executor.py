@@ -94,7 +94,6 @@ class MCPExecutor:
         file_allow_dirs: tuple[str, ...] | list[str] | None = None,
         tool_mode: str = "flat",
         output_base: str | None = None,
-        auth_mode: str = "static",
     ) -> None:
         self.spec_dir: str = str(Path(spec_dir).resolve())
         self.server_override = server_override
@@ -104,7 +103,6 @@ class MCPExecutor:
         self.file_allow_dirs: tuple[str, ...] = tuple(file_allow_dirs or ())
         self.tool_mode = tool_mode
         self.output_base = output_base
-        self.auth_mode = auth_mode
         _spec_kwargs: dict[str, Any] = {"upload_base": upload_base, "transport": transport}
         # todo 1（`build_tool_specs(mode=...)`）尚未落地时的兼容：callee 无
         # `mode` 形参则暂存不传（`self.tool_mode` 仍可查），落地后自动透传。
@@ -173,12 +171,6 @@ class MCPExecutor:
         session_headers = None
         if _sid:
             session_headers, _binding = load_session_headers(str(_sid))
-        elif self.auth_mode == "session-passthrough":
-            from cliyard.session_passthrough import SessionAuthError
-
-            raise SessionAuthError(
-                "missing _session_id (auth-mode=session-passthrough requires a session binding)"
-            )
         bridged, tmp_files = execution_manager._bridge_file_params(method_spec, params)
         try:
             result = execute_pipeline(

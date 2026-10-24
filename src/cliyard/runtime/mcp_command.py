@@ -40,7 +40,6 @@ def build_mcp_command(spec_dir: str) -> click.Command:
         file_allow_dirs: tuple[str, ...],
         mcp_tool_mode: str,
         output_base_url: str | None,
-        auth_mode: str,
     ) -> None:
         """Start this CLI's spec as an MCP server."""
         run_mcp_server(
@@ -56,7 +55,6 @@ def build_mcp_command(spec_dir: str) -> click.Command:
             file_allow_dirs=file_allow_dirs,
             tool_mode=mcp_tool_mode,
             output_base_url=output_base_url,
-            auth_mode=auth_mode,
         )
 
     return mcp_cmd
