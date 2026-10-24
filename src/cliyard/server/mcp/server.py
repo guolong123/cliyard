@@ -100,6 +100,7 @@ def create_mcp_server(
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     tool_mode: str = "flat",
     output_base: str | None = None,
+    auth_mode: str = "static",
 ) -> MCPServer:
     """构建 spec 对应的低层 MCP Server（工具动态注册自命令树）。
 
@@ -128,6 +129,7 @@ def create_mcp_server(
         file_allow_dirs=file_allow_dirs,
         tool_mode=tool_mode,
         output_base=output_base,
+        auth_mode=auth_mode,
     )
     return executor.to_mcp_server(name=name, version=version)
 
@@ -145,6 +147,7 @@ def build_mcp_http_app(
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     tool_mode: str = "flat",
     output_base: str | None = None,
+    auth_mode: str = "static",
 ):
     """构建 Streamable HTTP 的 Starlette app（独立 uvicorn 启动用）.
 
@@ -167,6 +170,7 @@ def build_mcp_http_app(
         file_allow_dirs=file_allow_dirs,
         tool_mode=tool_mode,
         output_base=output_base,
+        auth_mode=auth_mode,
     )
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
     transport_security = _transport_security_for(host)
@@ -222,6 +226,7 @@ def mount_mcp_http(
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     tool_mode: str = "flat",
     output_base: str | None = None,
+    auth_mode: str = "static",
 ) -> MCPServer:
     """把 MCP Streamable HTTP 挂载进现有 FastAPI serve（同一端口/uvicorn）。
 
@@ -247,6 +252,7 @@ def mount_mcp_http(
         transport="http",
         tool_mode=tool_mode,
         output_base=output_base,
+        auth_mode=auth_mode,
     )
     kwargs: dict[str, Any] = {"streamable_http_path": path, "host": host}
     transport_security = _transport_security_for(host)
@@ -309,6 +315,7 @@ def run_mcp_stdio(
     file_allow_dirs: tuple[str, ...] | list[str] | None = None,
     tool_mode: str = "flat",
     output_base: str | None = None,
+    auth_mode: str = "static",
 ) -> None:
     """以 stdio transport 启动 MCP Server（阻塞直到客户端断开）。
 
@@ -323,6 +330,7 @@ def run_mcp_stdio(
         file_allow_dirs=file_allow_dirs,
         tool_mode=tool_mode,
         output_base=output_base,
+        auth_mode=auth_mode,
     )
     click.echo(f"MCP (stdio) serving spec {Path(spec_dir).resolve()}", err=True)
     asyncio.run(_serve_stdio(server))
@@ -356,6 +364,7 @@ def run_mcp_server(
     version: str = "0.12.1",
     tool_mode: str = "flat",
     output_base_url: str | None = None,
+    auth_mode: str = "static",
 ) -> None:
     """启动 MCP Server。
 
@@ -388,6 +397,7 @@ def run_mcp_server(
             upload_dir=resolved_upload_dir,
             file_allow_dirs=file_allow_dirs,
             tool_mode=tool_mode,
+            auth_mode=auth_mode,
         )
         return
 
@@ -404,6 +414,7 @@ def run_mcp_server(
         file_allow_dirs=file_allow_dirs,
         tool_mode=tool_mode,
         output_base=output_base_url or f"http://{display_host(host)}:{port}",
+        auth_mode=auth_mode,
     )
     url = f"http://{display_host(host)}:{port}/mcp"
     click.echo(f"MCP (Streamable HTTP) serving spec {Path(spec_dir).resolve()} at {url}")
