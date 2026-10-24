@@ -90,16 +90,6 @@ _OPT_OUTPUT_BASE_URL = click.option(
         "(default: http://<host>:<port>)"
     ),
 )
-_OPT_AUTH_MODE = click.option(
-    "--auth-mode",
-    type=click.Choice(["static", "session-passthrough"]),
-    default="static",
-    show_default=True,
-    help=(
-        "Auth mode: static (profile/token) or session-passthrough "
-        "(require per-call _session_id; fail-closed when missing)"
-    ),
-)
 _OPT_MCP_TOOL_MODE = click.option(
     "--mcp-tool-mode",
     type=click.Choice(["flat", "grouped", "discover"]),
@@ -120,7 +110,6 @@ def _apply_options(f: Callable[..., Any]) -> Callable[..., Any]:
     transport，即 transport 在最外层。
     """
     f = _OPT_MCP_TOOL_MODE(f)
-    f = _OPT_AUTH_MODE(f)
     f = _OPT_OUTPUT_BASE_URL(f)
     f = _OPT_FILE_ALLOW_DIRS(f)
     f = _OPT_UPLOAD_BASE_URL(f)
