@@ -48,6 +48,10 @@ from cliyard.server.mcp.tools import (
     search_catalog,
     short_tool_desc,
 )
+from cliyard.session_passthrough import (
+    pop_session_id,
+    session_headers as load_session_headers,
+)
 
 logger = logging.getLogger("cliyard.server.mcp")
 
@@ -163,7 +167,11 @@ class MCPExecutor:
             base_url_override=self.server_override,
         )
 
-        bridged, tmp_files = execution_manager._bridge_file_params(method_spec, params or {})
+        params, _sid = pop_session_id(dict(params or {}))
+        session_headers = None
+        if _sid:
+            session_headers, _binding = load_session_headers(str(_sid))
+        bridged, tmp_files = execution_manager._bridge_file_params(method_spec, params)
         try:
             result = execute_pipeline(
                 kwargs=bridged,
@@ -176,6 +184,7 @@ class MCPExecutor:
                 allow_dirs=self.file_allow_dirs,
                 server_tmp_files=tmp_files,
                 spec_dir=self.spec_dir,
+                session_headers=session_headers,
             )
         finally:
             execution_manager._cleanup_tmp_files(tmp_files)

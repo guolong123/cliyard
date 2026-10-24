@@ -189,14 +189,46 @@ def create_cli(
         )
     )
 
+    cli.params.append(
+        click.Option(
+            ["--auth-mode"],
+            type=click.Choice(["static", "session-passthrough"]),
+            default="static",
+            show_default=True,
+            help=(
+                "Auth mode: static (profile/token) or session-passthrough "
+                "($KETACLI_SESSION_DIR/<sid>.json -> Cookie + X-Csrf-Token)"
+            ),
+        )
+    )
+    cli.params.append(
+        click.Option(
+            ["--session-id"],
+            default=None,
+            metavar="SID",
+            help=(
+                "Session id for --auth-mode session-passthrough "
+                "(default: $KETACLI_SESSION_ID)"
+            ),
+        )
+    )
+
     @click.pass_context
     def _root_callback(
-        ctx: click.Context, server: str | None, max_output_chars: int | None
+        ctx: click.Context,
+        server: str | None,
+        max_output_chars: int | None,
+        auth_mode: str | None,
+        session_id: str | None,
     ) -> None:
         if server:
             ctx.ensure_object(dict)["server"] = server
         if max_output_chars is not None:
             ctx.ensure_object(dict)["max_output_chars"] = max_output_chars
+        if auth_mode:
+            ctx.ensure_object(dict)["auth_mode"] = auth_mode
+        if session_id:
+            ctx.ensure_object(dict)["session_id"] = session_id
 
     cli.callback = _root_callback
 

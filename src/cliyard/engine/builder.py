@@ -335,6 +335,7 @@ def execute_pipeline(
     allow_dirs: list[str] | tuple[str, ...] | str | None = None,
     server_tmp_files: list[str] | tuple[str, ...] | set[str] | None = None,
     spec_dir: str | None = None,
+    session_headers: dict[str, str] | None = None,
 ) -> dict[str, Any] | str:
     """Execute the full request pipeline and return response data.
 
@@ -526,7 +527,14 @@ def execute_pipeline(
     )
     if http_client is None:
         _base = base_url_override or service_ctx.base_url
-        if service_ctx.auth_spec:
+        if session_headers:
+            client = HttpClient(_base, timeout=service_ctx.timeout)
+            client.default_headers.update(session_headers)
+            merged_params.setdefault("header", {})
+            if isinstance(merged_params.get("header"), dict):
+                merged_params["header"].update(session_headers)
+            http_client = client
+        elif service_ctx.auth_spec:
             client = HttpClient(_base, timeout=service_ctx.timeout)
             run_auth_chain(
                 service_ctx.auth_spec,
@@ -751,6 +759,22 @@ def _make_callback(
             _server = (ctx.find_root().obj or {}).get("server")
 
             # Run shared pipeline
+            import os as _os
+
+            _auth_mode = (ctx.find_root().obj or {}).get("auth_mode") or "static"
+            _sid = (ctx.find_root().obj or {}).get("session_id") or _os.environ.get(
+                "KETACLI_SESSION_ID"
+            )
+            _session_headers = None
+            if _auth_mode == "session-passthrough":
+                from cliyard.engine.errors import CliyError
+                from cliyard.session_passthrough import session_headers as _load_session_headers
+
+                if not _sid:
+                    raise CliyError(
+                        "session-passthrough requires --session-id or KETACLI_SESSION_ID"
+                    )
+                _session_headers, _binding = _load_session_headers(str(_sid))
             data = execute_pipeline(
                 kwargs,
                 method_spec,
@@ -758,6 +782,7 @@ def _make_callback(
                 service_ctx,
                 resource_name,
                 base_url_override=_server,
+                session_headers=_session_headers,
             )
 
             # Skip output formatting for file downloads
