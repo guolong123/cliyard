@@ -59,10 +59,9 @@ def test_write_local_overflow(tmp_path):
 
 
 def test_executor_truncation_returns_structured_object(tmp_path):
-    """Over-limit MCP output is one valid JSON object — no string + ⚠ tail."""
+    """Over-limit non-paginated output is one valid JSON object — no string + ⚠ tail."""
     ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
-    text = ex._limit_result({"items": [{"name": "repo", "type": "EVENTS", "app": "search"}],
-                             "total": 1, "blob": "y" * 50000})
+    text = ex._limit_result({"blob": "y" * 60000})
     parsed = json.loads(text)  # whole payload must parse
     assert parsed["truncated"] is True
     assert parsed["reason"] == "output_truncated"
@@ -70,10 +69,9 @@ def test_executor_truncation_returns_structured_object(tmp_path):
     assert parsed["chars"] > 10000
     assert parsed["limit"] > 0
     assert parsed["url"].startswith("http://h:1/outputs/")
-    assert "fields" in parsed["hint"] or "page_size" in parsed["hint"]
+    assert "page_size" in parsed["hint"] or "下载" in parsed["hint"]
     # full field structure is present, values are only type names
-    assert parsed["schema"]["items"][0]["name"] == "string"
-    assert parsed["schema"]["total"] == "integer"
+    assert parsed["schema"]["blob"] == "string"
     assert "⚠" not in text
     ident = parsed["url"].split("/outputs/", 1)[1].split("?", 1)[0]
     assert os.path.isfile(os.path.join(str(tmp_path), ident))
@@ -312,3 +310,89 @@ def test_local_params_exposed_in_tool_schema():
     assert schema["properties"]["brief"]["type"] == "boolean"
     assert schema["properties"]["fields"]["x-location"] == "local"
     assert "fields" not in schema["required"]
+
+
+def _repos(n, pad=700):
+    return {"items": [{"id": i, "name": f"r{i}", "type": "EVENTS", "app": "search", "blob": "x" * pad} for i in range(n)],
+            "total": n}
+
+
+def test_unified_projection_below_limit_is_unchanged(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    data = {"items": [{"id": 1, "name": "a", "type": "T", "blob": "x" * 10}], "total": 1}
+    out = ex._limit_result(data, {"page_size": 1}, {"items_path": "$.items"})
+    assert json.loads(out) == data  # no projection, no metadata
+
+
+def test_unified_projection_explicit_fields_below_limit(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    data = {"items": [{"id": 1, "name": "a", "type": "T", "blob": "x" * 10}], "total": 1}
+    out = ex._limit_result(data, {"fields": "id,name"}, {"items_path": "$.items"})
+    parsed = json.loads(out)
+    assert parsed["items"] == [{"id": 1, "name": "a"}]
+    assert parsed["projection"] == {"fields": ["id", "name"], "brief": False}
+    assert parsed["total"] == 1
+
+
+def test_unified_projection_above_limit_auto_brief_with_url(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    data = _repos(40, pad=2000)  # ~80KB > 50000: auto-brief must kick in
+    out = ex._limit_result(data, {"page_size": 40}, {"items_path": "$.items"})
+    parsed = json.loads(out)  # whole payload is valid JSON object
+    assert parsed["truncated"] is True and parsed["projected"] is True
+    assert isinstance(parsed["items"], list) and parsed["items"]
+    assert parsed["returned"] == len(parsed["items"]) <= parsed["total"] == 40
+    assert parsed["url"].startswith("http://h:1/outputs/")
+    assert "fields" in parsed["items"][0] or "id" in parsed["items"][0]
+    assert "blob" not in parsed["items"][0]  # auto brief dropped the big field
+    assert parsed["schema"]["items"][0]["blob"] == "string"
+    assert "fields" in parsed["hint"] or "brief" in parsed["hint"]
+
+
+def test_unified_projection_respects_spec_brief_fields(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    spec = {"items_path": "$.items", "project": {"brief_fields": ["name", "type"]}}
+    out = ex._limit_result(_repos(40, pad=2000), {"page_size": 40}, spec)
+    parsed = json.loads(out)
+    assert parsed["projection"]["fields"] == ["name", "type"]
+    assert set(parsed["items"][0]) == {"name", "type"}
+
+
+def test_non_paginated_over_limit_has_no_projection_hint(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    out = ex._limit_result({"blob": "y" * 60000}, {}, None)
+    parsed = json.loads(out)
+    assert parsed["truncated"] is True
+    assert "fields" not in parsed["hint"] and "brief" not in parsed["hint"]
+    assert "page_size" in parsed["hint"] or "下载" in parsed["hint"]
+
+
+def test_text_stream_result_is_not_projected(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    assert ex._limit_result("plain text", {}, None) == "plain text"
+
+
+def test_paginated_tool_schema_injects_unified_fields_and_brief():
+    from cliyard.server.schema_bridge import params_to_json_schema
+
+    schema = params_to_json_schema(
+        {"query": [{"name": "page", "type": "int"}]},
+        output_spec={"items_path": "$.items"},
+    )
+    assert schema["properties"]["fields"]["x-location"] == "local"
+    assert schema["properties"]["brief"]["type"] == "boolean"
+    plain = params_to_json_schema({"query": [{"name": "page", "type": "int"}]}, output_spec=None)
+    assert "fields" not in plain["properties"] and "brief" not in plain["properties"]
+
+
+def test_paginated_tool_description_uses_uniform_wording():
+    from cliyard.server.mcp.tools import _command_spec
+
+    spec = _command_spec(
+        "dashboard.list",
+        {"desc": "仪表盘列表", "method": "GET", "path": "dashboard", "schema": {}, "output": {"items_path": "$.dashboards"}},
+        "仪表盘",
+        "",
+    )
+    assert "fields" in spec.description and "brief" in spec.description
+    assert "50000" in spec.description and "下载" in spec.description

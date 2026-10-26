@@ -187,6 +187,7 @@ def params_to_json_schema(
     *,
     upload_base: str | None = None,
     transport: str = "http",
+    output_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """把 method ``params`` 的 5 个位置（path/query/header/body/argument）
     合并为一个 JSON Schema object.
@@ -222,6 +223,22 @@ def params_to_json_schema(
             properties[name] = prop
             if is_required and name not in required:
                 required.append(name)
+
+    # Unified list projection: every paginated output (``items_path``) gets the
+    # same two switches, regardless of the product. The execution pipeline
+    # (cliyard.output.projection) applies them; specs do not need per-tool code.
+    if isinstance(output_spec, dict) and output_spec.get("items_path"):
+        properties.setdefault("fields", {
+            "type": "string",
+            "description": "只返回指定字段（逗号分隔，如 name,type,app）。超限时自动精简",
+            "x-location": "local",
+        })
+        properties.setdefault("brief", {
+            "type": "boolean",
+            "default": False,
+            "description": "精简模式：仅返回 id/name/type/app 等关键字段。超限时自动启用",
+            "x-location": "local",
+        })
 
     schema: dict[str, Any] = {
         "type": "object",
@@ -368,7 +385,9 @@ def build_command_tree(
                         title=mname,
                         upload_base=upload_base,
                         transport=transport,
+                        output_spec=method_spec.get("output"),
                     ),
+                    "output": method_spec.get("output") or {},
                 }
             )
 

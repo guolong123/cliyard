@@ -60,6 +60,9 @@ class ToolSpec:
     description: str
     input_schema: dict[str, Any] = field(default_factory=lambda: dict(_EMPTY_SCHEMA))
     operations: dict[str, ToolSpec] | None = None
+    # ``output`` metadata (items_path / project.brief_fields) for the unified
+    # list projection in the MCP output pipeline.
+    output: dict[str, Any] = field(default_factory=dict)
 
     def as_tool(self) -> Tool:
         """转换为 MCP :class:`~mcp.types.Tool`（tools/list 返回用）。"""
@@ -87,6 +90,13 @@ def _command_spec(
         desc_parts.append(f"({resource_desc})")
     elif not resource_desc and group_desc and group_desc not in desc_parts:
         desc_parts.append(f"({group_desc})")
+    output_spec = cmd.get("output") if isinstance(cmd.get("output"), dict) else {}
+    if output_spec.get("items_path"):
+        # Uniform wording for every paginated list tool (no per-tool copy).
+        desc_parts.append(
+            "分页列表：可用 fields=字段1,字段2 或 brief=true 精简；"
+            "单次上限 50000 字符，超限会自动精简并给出完整 JSON 下载 URL"
+        )
     description = " | ".join(p for p in desc_parts if p) or name
 
     return ToolSpec(
@@ -95,6 +105,7 @@ def _command_spec(
         target=name,  # 命令场景 tool name == /api/execute target
         description=description,
         input_schema=cmd.get("schema") or dict(_EMPTY_SCHEMA),
+        output=output_spec,
     )
 
 

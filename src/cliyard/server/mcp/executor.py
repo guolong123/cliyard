@@ -531,18 +531,35 @@ class MCPExecutor:
                 content=[TextContent(type="text", text=text)],
                 is_error=True,
             )
-        return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result))])
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=self._limit_result(result, arguments, getattr(spec, "output", None)),
+                )
+            ]
+        )
 
-    def _limit_result(self, result: Any) -> str:
-        """Apply the output size guard; overflow goes to the shared upload store.
+    def _limit_result(
+        self,
+        result: Any,
+        arguments: dict[str, Any] | None = None,
+        output_spec: dict[str, Any] | None = None,
+    ) -> str:
+        """Apply unified projection + output size guard.
 
-        Over-limit results are replaced by one **structured JSON object** (never
-        a bare string / partial JSON + warning): it reports ``truncated``,
-        ``reason``, ``bytes``, ``limit``, the full field ``schema``, a download
-        ``url`` (or local ``file``) and an actionable ``hint``.  This lets the
-        model switch to ``fields``/``brief``/smaller ``page_size`` without
-        probing the limit by trial and error.
+        Behaviour (same for every tool):
+
+        * non-paginated results (``str`` / no ``items`` list) keep the previous
+          contract: below the limit unchanged, above it a structured notice with
+          download URL and a "reduce page_size / download" hint;
+        * paginated results (``{"items": [...]}``) support ``fields`` / ``brief``;
+          over the limit they are **auto-briefed** and returned as one object
+          with metadata + projected items + full-JSON download URL, so callers
+          never get a bare string / partial JSON / null.
         """
+        from cliyard.output import projection
+
         text = _render_result(result)
         try:
             from cliyard.output.limits import (
@@ -552,8 +569,21 @@ class MCPExecutor:
             )
 
             limit = resolve_max_chars()
+            params = arguments or {}
+            fields = projection.parse_fields(params.get("fields"))
+            brief = projection._truthy(params.get("brief"))
+            projectable = projection.is_projectable(result)
+
+            # Explicit projection also applies below the limit (caller asked).
+            if projectable and (fields or brief) and len(text) <= limit:
+                brief_fields = projection.default_brief_fields(result.get("items") or [], output_spec)
+                result = projection.project_items(result, fields or brief_fields)
+                result["projection"] = {"fields": fields or brief_fields, "brief": bool(brief and not fields)}
+                return _render_result(result)
+
             if len(text) <= limit:
                 return text
+
             file_path: str | None = None
             url: str | None = None
             overflow_error: str | None = None
@@ -571,6 +601,7 @@ class MCPExecutor:
             except Exception as exc:
                 overflow_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("output overflow handoff failed", exc_info=True)
+
             auth_hint = (
                 {
                     "header": "Authorization: Bearer <KETACLI_MCP_TOKEN>",
@@ -579,13 +610,43 @@ class MCPExecutor:
                 if url
                 else None
             )
+            schema = infer_schema(result)
             items = result.get("items") if isinstance(result, dict) else None
-            hint = (
-                "输出超过单次上限：请减小 page_size（列表类建议 ≤20），"
-                "或传 fields=字段1,字段2 / brief=true 只取需要的字段"
-            )
-            if isinstance(items, list):
-                hint += f"；本次 items={len(items)}"
+            item_count = len(items) if isinstance(items, list) else None
+
+            if projectable:
+                brief_fields = fields or projection.default_brief_fields(items or [], output_spec)
+                projected = projection.project_items(result, brief_fields)
+                meta: dict[str, Any] = {
+                    "truncated": True,
+                    "projected": True,
+                    "reason": "output_projected",
+                    "bytes": len(text.encode("utf-8")),
+                    "original_bytes": len(text.encode("utf-8")),
+                    "limit": limit,
+                    "items": item_count or 0,
+                    "projection": {"fields": brief_fields, "brief": bool(brief and not fields)},
+                    "schema": schema,
+                    "hint": (
+                        "输出超过单次上限，已自动精简字段；items 为精简后的数据，"
+                        "完整 JSON 见 url；也可以用 fields=... / brief=true 自行指定字段"
+                    ),
+                }
+                if url:
+                    meta["url"] = url
+                if file_path:
+                    meta["file"] = file_path
+                if auth_hint:
+                    meta["auth"] = auth_hint
+                if overflow_error:
+                    meta["overflow_error"] = overflow_error
+                payload, returned = projection.fit_items(projected, limit, base_meta=meta)
+                payload["returned"] = returned
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+
+            hint = "输出超过单次上限：请减小 page_size，或按 url 下载完整 JSON 后自行筛选"
+            if item_count is not None:
+                hint += f"；本次 items={item_count}"
             rendered, notice = truncate_text(
                 text,
                 limit,
@@ -593,13 +654,14 @@ class MCPExecutor:
                 url=url,
                 json_safe=True,
                 auth=auth_hint,
-                schema=infer_schema(result),
+                schema=schema,
                 hint=hint,
             )
-            if notice is not None and overflow_error:
-                # Still a single valid JSON object: add the handoff failure
-                # reason and keep the structured shape.
-                notice["overflow_error"] = overflow_error
+            if notice is not None:
+                if item_count is not None:
+                    notice["items"] = item_count
+                if overflow_error:
+                    notice["overflow_error"] = overflow_error
                 rendered = json.dumps(notice, ensure_ascii=False, indent=2)
             return rendered
         except Exception:
