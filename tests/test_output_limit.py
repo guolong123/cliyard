@@ -396,3 +396,17 @@ def test_paginated_tool_description_uses_uniform_wording():
     )
     assert "fields" in spec.description and "brief" in spec.description
     assert "50000" in spec.description and "下载" in spec.description
+
+
+def test_discover_call_nested_arguments_apply_fields(tmp_path):
+    """catalog ``call`` nests target args; fields/brief must still apply."""
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    data = {"items": [{"id": 1, "name": "a", "blob": "x" * 10}], "total": 1}
+    out = ex._limit_result(
+        data,
+        {"name": "dashboard.list", "arguments": {"fields": "name"}},
+        {"items_path": "$.items"},
+    )
+    parsed = json.loads(out)
+    assert parsed["items"] == [{"name": "a"}]
+    assert parsed["projection"]["fields"] == ["name"]

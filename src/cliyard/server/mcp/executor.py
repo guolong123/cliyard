@@ -570,6 +570,11 @@ class MCPExecutor:
 
             limit = resolve_max_chars()
             params = arguments or {}
+            # Discover-catalog ``call`` wraps the target arguments one level
+            # deeper ({"name": ..., "arguments": {...}}); projection switches
+            # live in the inner object.
+            if isinstance(params.get("arguments"), dict) and "name" in params:
+                params = params["arguments"]
             fields = projection.parse_fields(params.get("fields"))
             brief = projection._truthy(params.get("brief"))
             projectable = projection.is_projectable(result)
