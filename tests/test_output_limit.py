@@ -298,3 +298,17 @@ def test_project_keeps_items_list_and_total_int():
     out = project({"items": None, "total": None}, spec, {"brief": True})
     assert out["items"] == []
     assert out["total"] == 0
+
+
+def test_local_params_exposed_in_tool_schema():
+    """local-only switches (fields/brief) must reach the MCP tool schema."""
+    from cliyard.server.schema_bridge import params_to_json_schema
+
+    schema = params_to_json_schema({
+        "query": [{"name": "page_size", "type": "int"}],
+        "local": [{"name": "fields", "type": "string"}, {"name": "brief", "type": "bool", "default": False}],
+    })
+    assert "fields" in schema["properties"] and "brief" in schema["properties"]
+    assert schema["properties"]["brief"]["type"] == "boolean"
+    assert schema["properties"]["fields"]["x-location"] == "local"
+    assert "fields" not in schema["required"]

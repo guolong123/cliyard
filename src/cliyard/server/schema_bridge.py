@@ -25,7 +25,9 @@ from cliyard.engine.labels import resolve_labels
 from cliyard.engine.loader import load_cases, load_flows, load_service
 
 # JSON Schema 属性位置的固定遍历顺序（与 method params 的 YAML 分组一致）
-_PARAM_LOCATIONS = ("path", "query", "header", "body", "argument")
+# "local" params are validated but not sent over HTTP; they must still be
+# visible in the tool schema so callers can use output.project/brief switches.
+_PARAM_LOCATIONS = ("path", "query", "header", "body", "argument", "local")
 
 
 # ---------------------------------------------------------------------------
