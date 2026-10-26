@@ -41,6 +41,7 @@ from cliyard.server.executor import _sanitize_error, execution_manager
 from cliyard.server.redact import redact_sensitive
 from cliyard.server.uploads import redact_upload_path, sweep as _sweep_uploads
 
+from cliyard.server.mcp.context import raw_tool_arguments
 from cliyard.server.mcp.tools import (
     ToolSpec,
     build_plugin_tool_specs,
@@ -388,6 +389,22 @@ class MCPExecutor:
         ]
 
     def execute_spec(self, spec: ToolSpec, arguments: dict[str, Any]) -> Any:
+        """按 ToolSpec 分派执行，并向命令实现暴露本次原始 MCP arguments。
+
+        The context is set once for the outermost call and left untouched for
+        recursive grouped dispatch, so command plugins always see the complete
+        original arguments (including non-schema fields).
+        """
+        token = None
+        if raw_tool_arguments.get() is None:
+            token = raw_tool_arguments.set(dict(arguments or {}))
+        try:
+            return self._execute_spec(spec, arguments)
+        finally:
+            if token is not None:
+                raw_tool_arguments.reset(token)
+
+    def _execute_spec(self, spec: ToolSpec, arguments: dict[str, Any]) -> Any:
         """按 ToolSpec 分派执行（command / flow / plugin / case / grouped / discover）。"""
         if spec.kind == "discover_search":
             return self._discover_search(arguments)

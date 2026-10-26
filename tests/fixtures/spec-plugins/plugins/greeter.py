@@ -51,3 +51,17 @@ def register_pkg(cli, ctx):
         console.print(f"search {keys} limit={limit}")
 
     cli.add_command(pkg_group)
+
+
+@register_command("raw_args")
+def register_raw_args(cli, ctx):
+    """Echo the raw MCP arguments (used to verify the contextvar hook)."""
+
+    @click.command("raw_args")
+    def raw_args():
+        import json
+        from cliyard.server.mcp.context import get_raw_tool_arguments
+
+        click.echo(json.dumps(dict(get_raw_tool_arguments() or {}), sort_keys=True))
+
+    cli.add_command(raw_args)
