@@ -13,6 +13,7 @@ _bridge_file_params / redact_sensitive），支持 stdio（默认）与 Streamab
 """
 
 from cliyard.server.mcp.tools import ToolSpec, build_tool_specs
+from cliyard.server.mcp.context import get_raw_tool_arguments, raw_tool_arguments
 from cliyard.server.mcp.executor import MCPExecutor
 from cliyard.server.mcp.server import (
     build_mcp_http_app,
@@ -28,6 +29,8 @@ __all__ = [
     "ToolSpec",
     "build_tool_specs",
     "MCPExecutor",
+    "get_raw_tool_arguments",
+    "raw_tool_arguments",
     "create_mcp_server",
     "build_mcp_http_app",
     "mount_mcp_http",

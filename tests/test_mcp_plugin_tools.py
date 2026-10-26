@@ -132,3 +132,29 @@ def test_call_tool_unknown_plugin_raises():
     ex = MCPExecutor(_FIXTURES)
     with pytest.raises(ValueError):
         asyncio.run(ex.call_tool(None, type("P", (), {"name": "cmd.nonexistent", "arguments": {}})))
+
+
+def test_execute_spec_exposes_raw_tool_arguments_to_plugin():
+    ex = MCPExecutor(_FIXTURES)
+    result = ex.execute_spec(
+        ex.tool_specs["cmd.raw_args"],
+        {"_session_id": "sid-context", "ignored": "value"},
+    )
+    import json
+    assert json.loads(result) == {"_session_id": "sid-context", "ignored": "value"}
+
+
+def test_call_tool_contextvar_is_scoped_and_reset():
+    ex = MCPExecutor(_FIXTURES)
+    params = type("P", (), {
+        "name": "cmd.raw_args",
+        "arguments": {"_session_id": "sid-call"},
+    })
+    first = asyncio.run(ex.call_tool(None, params))
+    assert first.is_error is False
+    import json
+    assert json.loads(getattr(first.content[0], "text", "")) == {"_session_id": "sid-call"}
+    second = asyncio.run(ex.call_tool(None, type("P", (), {
+        "name": "cmd.raw_args", "arguments": {},
+    })))
+    assert json.loads(getattr(second.content[0], "text", "")) == {}
