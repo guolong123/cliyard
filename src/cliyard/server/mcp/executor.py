@@ -534,11 +534,19 @@ class MCPExecutor:
         return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result))])
 
     def _limit_result(self, result: Any) -> str:
-        """Apply the output size guard; overflow goes to the shared upload store."""
+        """Apply the output size guard; overflow goes to the shared upload store.
+
+        Over-limit results are replaced by one **structured JSON object** (never
+        a bare string / partial JSON + warning): it reports ``truncated``,
+        ``reason``, ``bytes``, ``limit``, the full field ``schema``, a download
+        ``url`` (or local ``file``) and an actionable ``hint``.  This lets the
+        model switch to ``fields``/``brief``/smaller ``page_size`` without
+        probing the limit by trial and error.
+        """
         text = _render_result(result)
         try:
             from cliyard.output.limits import (
-                human_warning,
+                infer_schema,
                 resolve_max_chars,
                 truncate_text,
             )
@@ -571,14 +579,28 @@ class MCPExecutor:
                 if url
                 else None
             )
-            rendered, notice = truncate_text(
-                text, limit, file=file_path, url=url, json_safe=True, auth=auth_hint
+            items = result.get("items") if isinstance(result, dict) else None
+            hint = (
+                "输出超过单次上限：请减小 page_size（列表类建议 ≤20），"
+                "或传 fields=字段1,字段2 / brief=true 只取需要的字段"
             )
-            if notice is not None:
-                if overflow_error:
-                    notice["overflow_error"] = overflow_error
-                    rendered = json.dumps(notice, ensure_ascii=False, indent=2)
-                rendered = f"{rendered}\n{human_warning(notice)}"
+            if isinstance(items, list):
+                hint += f"；本次 items={len(items)}"
+            rendered, notice = truncate_text(
+                text,
+                limit,
+                file=file_path,
+                url=url,
+                json_safe=True,
+                auth=auth_hint,
+                schema=infer_schema(result),
+                hint=hint,
+            )
+            if notice is not None and overflow_error:
+                # Still a single valid JSON object: add the handoff failure
+                # reason and keep the structured shape.
+                notice["overflow_error"] = overflow_error
+                rendered = json.dumps(notice, ensure_ascii=False, indent=2)
             return rendered
         except Exception:
             return text

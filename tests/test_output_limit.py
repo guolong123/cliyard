@@ -58,15 +58,23 @@ def test_write_local_overflow(tmp_path):
     assert Path(path).read_text(encoding="utf-8") == text
 
 
-def test_executor_truncation_writes_overflow_and_url(tmp_path):
+def test_executor_truncation_returns_structured_object(tmp_path):
+    """Over-limit MCP output is one valid JSON object — no string + ⚠ tail."""
     ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
-    text = ex._limit_result({"blob": "y" * 50000})
-    head = text.split("\n{", 1)[0] if False else text[: text.rindex("}") + 1]
-    parsed = json.loads(head)
+    text = ex._limit_result({"items": [{"name": "repo", "type": "EVENTS", "app": "search"}],
+                             "total": 1, "blob": "y" * 50000})
+    parsed = json.loads(text)  # whole payload must parse
     assert parsed["truncated"] is True
-    assert parsed["original_chars"] > 10000
+    assert parsed["reason"] == "output_truncated"
+    assert parsed["bytes"] > 10000
+    assert parsed["chars"] > 10000
+    assert parsed["limit"] > 0
     assert parsed["url"].startswith("http://h:1/outputs/")
-    assert "⚠" in text
+    assert "fields" in parsed["hint"] or "page_size" in parsed["hint"]
+    # full field structure is present, values are only type names
+    assert parsed["schema"]["items"][0]["name"] == "string"
+    assert parsed["schema"]["total"] == "integer"
+    assert "⚠" not in text
     ident = parsed["url"].split("/outputs/", 1)[1].split("?", 1)[0]
     assert os.path.isfile(os.path.join(str(tmp_path), ident))
 
@@ -230,3 +238,63 @@ def test_outputs_endpoint_sweeps_expired_upload(tmp_path):
     os.utime(stale, (past, past))
     asyncio.run(mcp_output_endpoint(_fake_request(tmp_path, "cliyard-upload-deadbeef-output.json")))
     assert not stale.exists()
+
+
+def test_infer_schema_merges_item_keys_and_types():
+    from cliyard.output.limits import infer_schema
+
+    schema = infer_schema({
+        "items": [
+            {"name": "a", "type": "EVENTS", "size": 1},
+            {"name": "b", "app": "search", "flag": True},
+        ],
+        "total": 2,
+    })
+    item = schema["items"][0]
+    assert item["name"] == "string"
+    assert item["type"] == "string"
+    assert item["size"] == "integer"
+    assert item["app"] == "string"
+    assert item["flag"] == "boolean"
+    assert schema["total"] == "integer"
+
+
+def test_project_fields_and_brief():
+    from cliyard.output.pagination import project
+
+    data = {
+        "items": [
+            {"name": "a", "type": "EVENTS", "app": "search", "bytes": 10, "description": "x"},
+            {"name": "b", "type": "METRICS", "app": "search", "bytes": 20, "description": "y"},
+        ],
+        "total": 2,
+    }
+    spec = {
+        "fields_param": "fields",
+        "brief_param": "brief",
+        "allowed_fields": ["name", "type", "app", "bytes", "description"],
+        "brief_fields": ["name", "type", "app"],
+    }
+    out = project(data, spec, {"fields": "name,type"})
+    assert out["items"] == [{"name": "a", "type": "EVENTS"}, {"name": "b", "type": "METRICS"}]
+    assert out["total"] == 2
+    assert out["projection"] == {"fields": ["name", "type"], "brief": False}
+
+    brief = project(data, spec, {"brief": True})
+    assert brief["items"][0] == {"name": "a", "type": "EVENTS", "app": "search"}
+    assert brief["projection"]["brief"] is True
+
+    as_list = project(data, spec, {"fields": ["app", "nope"]})
+    assert as_list["items"][0] == {"app": "search"}
+    assert as_list["projection"]["ignored"] == ["nope"]
+
+    assert project(data, spec, {}) is data
+
+
+def test_project_keeps_items_list_and_total_int():
+    from cliyard.output.pagination import project
+
+    spec = {"allowed_fields": ["name"], "brief_fields": ["name"]}
+    out = project({"items": None, "total": None}, spec, {"brief": True})
+    assert out["items"] == []
+    assert out["total"] == 0
