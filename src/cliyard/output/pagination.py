@@ -23,10 +23,16 @@ def _truthy(value: Any) -> bool:
 def apply_output_transforms(
     data: Any, output_spec: dict[str, Any], params: dict[str, Any]
 ) -> Any:
-    """Apply ``output.summary`` / ``output.paginate`` when opted in and requested."""
+    """Apply ``output.summary`` / ``output.project`` / ``output.paginate`` when opted in."""
     summary_spec = output_spec.get("summary")
     if isinstance(summary_spec, dict) and _truthy(params.get("summary")):
         return summarize(data, summary_spec)
+    project_spec = output_spec.get("project")
+    if isinstance(project_spec, dict):
+        data = project(data, project_spec, params)
+    total_pages_spec = output_spec.get("total_pages")
+    if isinstance(total_pages_spec, dict):
+        data = add_total_pages(data, total_pages_spec, params)
     paginate_spec = output_spec.get("paginate")
     if isinstance(paginate_spec, dict):
         return paginate(data, paginate_spec, params)
@@ -83,4 +89,53 @@ def summarize(data: Any, spec: dict[str, Any]) -> dict[str, Any]:
             key = str(item.get(health_field, "unknown"))
             dist[key] = dist.get(key, 0) + 1
         result["summary"]["distribution"] = dist
+    return result
+
+
+def _as_field_list(value: Any) -> list[str]:
+    """Normalise ``fields`` argument: comma/space separated string or a list."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw = [str(item) for item in value]
+    else:
+        raw = str(value).replace(";", ",").split(",")
+    fields: list[str] = []
+    for item in raw:
+        for part in str(item).split():
+            name = part.strip()
+            if name and name not in fields:
+                fields.append(name)
+    return fields
+
+
+def project(data: Any, spec: dict[str, Any], params: dict[str, Any]) -> Any:
+    """Backward-compatible wrapper: single implementation lives in projection."""
+    from cliyard.output.projection import project as _project
+
+    return _project(data, spec, params)
+
+
+def add_total_pages(data: Any, spec: dict[str, Any], params: dict[str, Any]) -> Any:
+    """Add ``totalPages`` from ``total`` and the effective page size.
+
+    Server-side paginated APIs already return the real ``total``; this helper
+    only computes the page count and never slices ``items`` (unlike
+    :func:`paginate`). Spec: ``output.total_pages: {size_param: per_page}``.
+    """
+    if not isinstance(data, dict):
+        return data
+    total = data.get("total")
+    if not isinstance(total, int):
+        return data
+    size = _as_int(params.get(spec.get("size_param", "page_size")))
+    if not size:
+        size = _as_int(spec.get("default_size"))
+    if not size or size <= 0:
+        return data
+    import math
+
+    result = dict(data)
+    result["totalPages"] = int(math.ceil(total / size))
+    return result
     return result

@@ -23,6 +23,16 @@ from cliyard.server.mcp.tools import build_plugin_tool_specs, build_tool_specs
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "spec-plugins"
 
 
+
+def _cmd_text(result):
+    """Plugin commands now return a structured envelope (P1-4); text is in ``text``."""
+    if isinstance(result, dict) and {"status", "items", "total"} <= set(result):
+        if "text" in result:
+            return result["text"]
+        return json.dumps(result.get("items"))
+    return result
+
+
 def test_plugin_tool_names_and_kind():
     specs = build_plugin_tool_specs(_FIXTURES)
     names = set(specs)
@@ -74,7 +84,7 @@ def test_execute_plugin_command_captures_rich_output():
     result = ex.execute_spec(
         ex.tool_specs["cmd.hello"], {"name": "world", "greeting": "Hi"}
     )
-    assert result == "Hi, world!"
+    assert _cmd_text(result) == "Hi, world!"
 
 
 def test_execute_plugin_command_flag_and_uppercase():
@@ -83,7 +93,7 @@ def test_execute_plugin_command_flag_and_uppercase():
         ex.tool_specs["cmd.hello"],
         {"name": "world", "greeting": "hi", "uppercase": True},
     )
-    assert result == "HI, WORLD!"
+    assert _cmd_text(result) == "HI, WORLD!"
 
 
 def test_execute_plugin_group_subcommand():
@@ -91,7 +101,7 @@ def test_execute_plugin_group_subcommand():
     result = ex.execute_spec(
         ex.tool_specs["cmd.pkg.info"], {"package_name": "app", "verbose": True}
     )
-    assert result == "pkg app verbose=True"
+    assert _cmd_text(result) == "pkg app verbose=True"
 
 
 def test_execute_plugin_multiple_argument_list():
@@ -99,13 +109,13 @@ def test_execute_plugin_multiple_argument_list():
     result = ex.execute_spec(
         ex.tool_specs["cmd.pkg.search"], {"keywords": ["a", "b"], "limit": 5}
     )
-    assert result == "search ['a', 'b'] limit=5"
+    assert _cmd_text(result) == "search ['a', 'b'] limit=5"
 
 
 def test_execute_plugin_missing_optional_args_uses_defaults():
     ex = MCPExecutor(_FIXTURES)
     result = ex.execute_spec(ex.tool_specs["cmd.pkg.search"], {})
-    assert result == "search ['*'] limit=10"
+    assert _cmd_text(result) == "search ['*'] limit=10"
 
 
 def test_execute_plugin_missing_required_argument_errors():
@@ -141,7 +151,7 @@ def test_execute_spec_exposes_raw_tool_arguments_to_plugin():
         {"_session_id": "sid-context", "ignored": "value"},
     )
     import json
-    assert json.loads(result) == {"_session_id": "sid-context", "ignored": "value"}
+    assert result["items"][0] == {"_session_id": "sid-context", "ignored": "value"}
 
 
 def test_call_tool_contextvar_is_scoped_and_reset():
@@ -153,8 +163,11 @@ def test_call_tool_contextvar_is_scoped_and_reset():
     first = asyncio.run(ex.call_tool(None, params))
     assert first.is_error is False
     import json
-    assert json.loads(getattr(first.content[0], "text", "")) == {"_session_id": "sid-call"}
+    first_env = json.loads(getattr(first.content[0], "text", ""))
+    assert first_env["status"] == "ok"
+    assert first_env["items"][0] == {"_session_id": "sid-call"}
     second = asyncio.run(ex.call_tool(None, type("P", (), {
         "name": "cmd.raw_args", "arguments": {},
     })))
-    assert json.loads(getattr(second.content[0], "text", "")) == {}
+    second_env = json.loads(getattr(second.content[0], "text", ""))
+    assert second_env["items"][0] == {}

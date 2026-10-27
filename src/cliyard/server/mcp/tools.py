@@ -60,6 +60,11 @@ class ToolSpec:
     description: str
     input_schema: dict[str, Any] = field(default_factory=lambda: dict(_EMPTY_SCHEMA))
     operations: dict[str, ToolSpec] | None = None
+    # Declared output contract: "json" (structured envelope) or "text" (raw).
+    output_kind: str = "json"
+    # ``output`` metadata (items_path / project.brief_fields) for the unified
+    # list projection in the MCP output pipeline.
+    output: dict[str, Any] = field(default_factory=dict)
 
     def as_tool(self) -> Tool:
         """转换为 MCP :class:`~mcp.types.Tool`（tools/list 返回用）。"""
@@ -87,6 +92,14 @@ def _command_spec(
         desc_parts.append(f"({resource_desc})")
     elif not resource_desc and group_desc and group_desc not in desc_parts:
         desc_parts.append(f"({group_desc})")
+    output_spec = cmd.get("output") if isinstance(cmd.get("output"), dict) else {}
+    output_kind = "text" if (output_spec.get("kind") == "text" or output_spec.get("envelope") is False) else "json"
+    if output_spec.get("items_path"):
+        # Uniform wording for every paginated list tool (no per-tool copy).
+        desc_parts.append(
+            "分页列表：可用 fields=字段1,字段2 或 brief=true 精简；"
+            "超过服务端配置的单次输出上限时会自动精简并给出完整 JSON 下载 URL"
+        )
     description = " | ".join(p for p in desc_parts if p) or name
 
     return ToolSpec(
@@ -95,6 +108,8 @@ def _command_spec(
         target=name,  # 命令场景 tool name == /api/execute target
         description=description,
         input_schema=cmd.get("schema") or dict(_EMPTY_SCHEMA),
+        output=output_spec,
+        output_kind=output_kind,
     )
 
 
@@ -554,7 +569,7 @@ def _click_command_to_schema(cmd: Any) -> dict[str, Any]:
 
 
 def _walk_plugin_commands(
-    cmd: Any, prefix: str, specs: dict[str, ToolSpec]
+    cmd: Any, prefix: str, specs: dict[str, ToolSpec], inherited_kind: str = "json"
 ) -> None:
     """递归遍历 click 命令（含 group 子命令），注册为 ``cmd.<...>`` 工具。
 
@@ -562,13 +577,16 @@ def _walk_plugin_commands(
     和 flow 工具（``flow.<command>``）命名空间隔离，杜绝冲突。
     """
     base = f"cmd.{prefix}" if prefix else "cmd"
+    output_kind = str(getattr(cmd, "_cliyard_output_kind", inherited_kind) or inherited_kind)
     if isinstance(cmd, click.Group):
         ctx = click.Context(cmd)
         for sub_name in cmd.list_commands(ctx):
             sub = cmd.get_command(ctx, sub_name)
             if sub is None or getattr(sub, "hidden", False):
                 continue
-            _walk_plugin_commands(sub, f"{prefix}.{sub_name}" if prefix else sub_name, specs)
+            _walk_plugin_commands(
+                sub, f"{prefix}.{sub_name}" if prefix else sub_name, specs, output_kind
+            )
         return
 
     # 叶子命令 → ToolSpec
@@ -580,6 +598,7 @@ def _walk_plugin_commands(
         target=name,
         description=str(description),
         input_schema=_click_command_to_schema(cmd),
+        output_kind=output_kind,
     )
     _register(specs, name, spec)
 
@@ -604,6 +623,9 @@ def _build_plugin_cli(
     for _cmd_name, _cmd_fn in PluginRegistry.get_all_commands().items():
         try:
             _cmd_fn(cli, base_ctx)
+            mounted = cli.commands.get(_cmd_name)
+            if mounted is not None:
+                mounted._cliyard_output_kind = getattr(_cmd_fn, "_cliyard_output_kind", "json")
         except Exception:  # 单个插件挂载失败不应阻断其他工具
             logger.exception("command plugin %r failed to mount", _cmd_name)
     return cli

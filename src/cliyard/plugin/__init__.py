@@ -214,9 +214,16 @@ def register_method(name: str):
     return decorator
 
 
-def register_command(name: str):
-    """Decorator that registers a function as a top-level command builder."""
+def register_command(name: str, output_kind: str = "json"):
+    """Decorator that registers a top-level command builder.
+
+    ``output_kind`` declares the output contract for the whole command group:
+    ``"json"`` (default) gets the structured envelope, ``"text"`` keeps the raw
+    text stream (CLI/MCP clients see exactly what the command prints). The
+    framework itself has no product knowledge.
+    """
     def decorator(fn):
+        fn._cliyard_output_kind = output_kind
         PluginRegistry.register_command(name, fn)
         return fn
     return decorator
