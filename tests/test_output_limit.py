@@ -267,3 +267,14 @@ def test_add_total_pages():
     assert out["totalPages"] == 3
     assert out["total"] == 41 and out["items"] == [1, 2]
     assert add_total_pages({"items": [], "total": 5}, spec, {"per_page": 0})["totalPages"] == 1
+
+
+def test_paginated_result_gets_status_marker(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    ok = json.loads(ex._limit_result({"items": [{"id": 1}], "total": 3}))
+    assert ok["status"] == "ok" and ok["total"] == 3
+    empty = json.loads(ex._limit_result({"items": [], "total": 0}))
+    assert empty == {"items": [], "total": 0, "status": "empty"}
+    # total missing -> derived from items
+    derived = json.loads(ex._limit_result({"items": [{"id": 1}, {"id": 2}]}))
+    assert derived["total"] == 2 and derived["status"] == "ok"

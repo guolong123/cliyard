@@ -601,6 +601,16 @@ class MCPExecutor:
 
     def _limit_result(self, result: Any) -> str:
         """Apply the output size guard; overflow goes to the shared upload store."""
+        # Every paginated result carries the same ``status`` marker (P1-4):
+        # resource list calls return ``{items,total}``; add ok/empty so callers
+        # never have to infer emptiness from a bare array/string.
+        if isinstance(result, dict) and isinstance(result.get("items"), list):
+            if "status" not in result:
+                result = dict(result)
+                result["status"] = "ok" if result["items"] else "empty"
+            if not isinstance(result.get("total"), int):
+                result["total"] = len(result["items"])
+
         text = _render_result(result)
         try:
             from cliyard.output.limits import (
