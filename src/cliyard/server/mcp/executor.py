@@ -52,6 +52,68 @@ from cliyard.server.mcp.tools import (
 
 logger = logging.getLogger("cliyard.server.mcp")
 
+# P1-4: structured commands return a uniform envelope; text-stream tools are
+# explicitly whitelisted and keep their raw text contract. New text tools must
+# be added here (and documented) — everything else is structured by default.
+TEXT_STREAM_TARGETS = frozenset({
+    "cmd.skills.list", "cmd.skills.get", "cmd.skills.install", "cmd.skills.uninstall",
+    "cmd.spl.list", "cmd.doc", "cmd.curl",
+})
+TEXT_STREAM_PREFIXES = ("cmd.doc.",)
+
+
+def is_text_stream_target(target: str) -> bool:
+    return target in TEXT_STREAM_TARGETS or any(target.startswith(p) for p in TEXT_STREAM_PREFIXES)
+
+
+def command_envelope(target: str, out: str, err: str) -> Any:
+    """Normalise plugin-command output (P1-4).
+
+    Structured commands always return a dict:
+    ``{status: ok|empty|error, items: [...], total: N, warn?: str}``
+    (dict JSON payloads are carried as a single item; list payloads keep their
+    items). Text-stream tools keep the raw text (see ``TEXT_STREAM_TARGETS``).
+    """
+    if is_text_stream_target(target):
+        if err and out:
+            return f"{out}\n[stderr] {err}"
+        return out or err or f"(no output from {target})"
+    if not out:
+        if err:
+            return {"status": "error", "items": [], "total": 0, "warn": err}
+        return {"status": "empty", "items": [], "total": 0}
+    try:
+        payload = json.loads(out)
+    except (TypeError, ValueError):
+        return {
+            "status": "ok" if not err else "ok",
+            "items": [],
+            "total": 0,
+            "text": out,
+            **({"warn": err} if err else {}),
+        }
+    result: dict[str, Any]
+    if isinstance(payload, list):
+        result = {"status": "ok" if payload else "empty", "items": payload, "total": len(payload)}
+    elif isinstance(payload, dict):
+        if "items" in payload:
+            items = payload.get("items") if isinstance(payload.get("items"), list) else []
+            total = payload.get("total")
+            if not isinstance(total, int):
+                total = len(items)
+            result = {"status": "ok" if items else "empty", "items": items, "total": total}
+            for key, value in payload.items():
+                if key not in ("items", "total", "status", "warn"):
+                    result[key] = value
+        else:
+            result = {"status": "ok", "items": [payload], "total": 1}
+    else:
+        result = {"status": "ok", "items": [payload], "total": 1}
+    if err:
+        result["warn"] = err
+    return result
+
+
 
 def _render_result(result: Any) -> str:
     """把结构化结果渲染为 MCP 文本（dict/list → 缩进 JSON，其余 str()）。"""
@@ -340,9 +402,7 @@ class MCPExecutor:
 
         out = out_buf.getvalue().strip()
         err = err_buf.getvalue().strip()
-        if err and out:
-            return f"{out}\n[stderr] {err}"
-        return out or err or f"(no output from {spec.target})"
+        return command_envelope(spec.target, out, err)
 
     def execute_case(self, case_name: str, params: dict[str, Any]) -> Any:
         """Execute a case and return aggregated results."""
@@ -528,7 +588,13 @@ class MCPExecutor:
                 _sanitize_error(str(exc), self.spec_dir), self.upload_dir
             )
             return CallToolResult(
-                content=[TextContent(type="text", text=text)],
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {"status": "error", "items": [], "total": 0, "warn": text},
+                        ensure_ascii=False,
+                    ),
+                )],
                 is_error=True,
             )
         return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result))])

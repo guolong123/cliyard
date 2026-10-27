@@ -230,3 +230,40 @@ def test_outputs_endpoint_sweeps_expired_upload(tmp_path):
     os.utime(stale, (past, past))
     asyncio.run(mcp_output_endpoint(_fake_request(tmp_path, "cliyard-upload-deadbeef-output.json")))
     assert not stale.exists()
+
+
+def test_command_envelope_structured_shapes():
+    from cliyard.server.mcp.executor import command_envelope
+
+    empty = command_envelope("dashboard.list", "", "")
+    assert empty == {"status": "empty", "items": [], "total": 0}
+
+    rows = command_envelope("dashboard.list", json.dumps([{"id": 1}]), "")
+    assert rows["status"] == "ok" and rows["total"] == 1 and rows["items"][0]["id"] == 1
+
+    page = command_envelope("dashboard.list", json.dumps({"items": [{"id": 1}], "total": 9}), "")
+    assert page["total"] == 9 and page["status"] == "ok"
+
+    single = command_envelope("dashboard.create", json.dumps({"id": "d1", "chartCount": 2}), "")
+    assert single == {"status": "ok", "items": [{"id": "d1", "chartCount": 2}], "total": 1}
+
+    warn = command_envelope("dashboard.create", json.dumps({"id": "d1"}), "deprecated flag")
+    assert warn["warn"] == "deprecated flag" and warn["status"] == "ok"
+
+
+def test_command_envelope_text_whitelist():
+    from cliyard.server.mcp.executor import command_envelope
+
+    assert command_envelope("cmd.skills.list", "skill-a\nskill-b", "") == "skill-a\nskill-b"
+    assert "stderr" in command_envelope("cmd.curl", "body", "warn")
+    assert command_envelope("cmd.spl.list", "", "") == "(no output from cmd.spl.list)"
+
+
+def test_add_total_pages():
+    from cliyard.output.pagination import add_total_pages
+
+    spec = {"size_param": "per_page", "default_size": 20}
+    out = add_total_pages({"items": [1, 2], "total": 41}, spec, {"per_page": 20})
+    assert out["totalPages"] == 3
+    assert out["total"] == 41 and out["items"] == [1, 2]
+    assert add_total_pages({"items": [], "total": 5}, spec, {"per_page": 0})["totalPages"] == 1

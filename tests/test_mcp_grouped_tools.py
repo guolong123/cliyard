@@ -467,7 +467,7 @@ def test_08_same_result_plugin_command(spec_dir: Path):
         ex_grouped.tool_specs["cmd.pkg"], {"operation": "search", **args}
     )
     assert grouped_result == flat_result
-    assert "search ['a', 'b'] limit=5" in grouped_result
+    assert "search ['a', 'b'] limit=5" in grouped_result["text"]
 
 
 def test_09_collision_annotation_and_identical_field_quiet(spec_dir: Path):

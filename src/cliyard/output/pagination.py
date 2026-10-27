@@ -84,3 +84,27 @@ def summarize(data: Any, spec: dict[str, Any]) -> dict[str, Any]:
             dist[key] = dist.get(key, 0) + 1
         result["summary"]["distribution"] = dist
     return result
+
+
+def add_total_pages(data: Any, spec: dict[str, Any], params: dict[str, Any]) -> Any:
+    """Add ``totalPages`` from ``total`` and the effective page size.
+
+    Server-side paginated APIs already return the real ``total``; this helper
+    only computes the page count and never slices ``items`` (unlike
+    :func:`paginate`). Spec: ``output.total_pages: {size_param: per_page}``.
+    """
+    if not isinstance(data, dict):
+        return data
+    total = data.get("total")
+    if not isinstance(total, int):
+        return data
+    size = _as_int(params.get(spec.get("size_param", "page_size")))
+    if not size:
+        size = _as_int(spec.get("default_size"))
+    if not size or size <= 0:
+        return data
+    import math
+
+    result = dict(data)
+    result["totalPages"] = int(math.ceil(total / size))
+    return result
