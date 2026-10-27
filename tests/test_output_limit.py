@@ -410,3 +410,14 @@ def test_discover_call_nested_arguments_apply_fields(tmp_path):
     parsed = json.loads(out)
     assert parsed["items"] == [{"name": "a"}]
     assert parsed["projection"]["fields"] == ["name"]
+
+
+def test_fit_items_preserves_extra_metadata():
+    from cliyard.output import projection
+
+    data = {"items": [{"id": i, "blob": "x" * 500} for i in range(10)], "total": 10,
+            "totalPages": 2, "status": "ok", "projection": {"fields": ["id"]}}
+    payload, returned = projection.fit_items(data, 2500, base_meta={"truncated": True, "projected": True})
+    assert payload["totalPages"] == 2 and payload["status"] == "ok"
+    assert payload["projection"] == {"fields": ["id"]}
+    assert returned > 0 and payload["items"]

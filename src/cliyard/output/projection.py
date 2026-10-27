@@ -114,19 +114,18 @@ def fit_items(
     if not isinstance(total, int):
         total = len(items)
     keep = len(items)
-    payload: dict[str, Any] = {}
     while keep > 0:
-        candidate = dict(data)
-        candidate["items"] = items[:keep]
-        payload = dict(base_meta or {})
+        payload = {k: v for k, v in data.items() if k not in ("items", "total")}
+        payload.update(base_meta or {})
         payload.update({
-            "items": candidate["items"],
+            "items": items[:keep],
             "returned": keep,
             "total": total,
         })
         if _encoded_size(payload) <= max(limit - FIT_MARGIN, 1024):
             return payload, keep
         keep -= 1
-    payload = dict(base_meta or {})
+    payload = {k: v for k, v in data.items() if k not in ("items", "total")}
+    payload.update(base_meta or {})
     payload.update({"items": [], "returned": 0, "total": total})
     return payload, 0
