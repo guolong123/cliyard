@@ -52,15 +52,100 @@ from cliyard.server.mcp.tools import (
 
 logger = logging.getLogger("cliyard.server.mcp")
 
+# P1-4: structured commands return a uniform envelope; text-stream tools are
+# explicitly whitelisted and keep their raw text contract. New text tools must
+# be added here (and documented) — everything else is structured by default.
+# Output kinds are declared by tool metadata (spec ``output.kind`` or command
+# plugin ``register_command(output_kind=...)``); no product names live here.
+def command_envelope(out: str, err: str, output_kind: str = "json") -> Any:
+    """Normalise command output according to the declared *output_kind*."""
+    if output_kind == "text":
+        if err and out:
+            return f"{out}\n[stderr] {err}"
+        return out or err or "(no output)"
+    if not out:
+        if err:
+            return {"status": "error", "items": [], "total": 0, "warn": err}
+        return {"status": "empty", "items": [], "total": 0}
+    try:
+        payload = json.loads(out)
+    except (TypeError, ValueError):
+        return {"status": "ok", "items": [], "total": 0, "text": out,
+                **({"warn": err} if err else {})}
+    result: dict[str, Any]
+    if isinstance(payload, list):
+        result = {"status": "ok" if payload else "empty", "items": payload, "total": len(payload)}
+    elif isinstance(payload, dict):
+        payload_status = str(payload.get("status") or "")
+        payload_warn = payload.get("warn")
+        if "items" in payload:
+            items = payload.get("items") if isinstance(payload.get("items"), list) else []
+            total = payload.get("total")
+            if not isinstance(total, int):
+                total = len(items)
+            status = "error" if payload_status == "error" else ("ok" if items else "empty")
+            result = {"status": status, "items": items, "total": total}
+            for key, value in payload.items():
+                if key not in ("items", "total", "status", "warn"):
+                    result[key] = value
+        elif payload_status == "error":
+            result = {"status": "error", "items": [], "total": 0}
+            result.update({k: v for k, v in payload.items() if k not in ("status", "warn")})
+        else:
+            result = {"status": "ok", "items": [payload], "total": 1}
+        if payload_warn:
+            result["warn"] = payload_warn
+    else:
+        result = {"status": "ok", "items": [payload], "total": 1}
+    if err:
+        result["warn"] = err
+    return result
+
 
 def _render_result(result: Any) -> str:
-    """把结构化结果渲染为 MCP 文本（dict/list → 缩进 JSON，其余 str()）。"""
+    """Render a structured result as MCP text (dict/list → indented JSON)."""
     if isinstance(result, (dict, list)):
         try:
             return json.dumps(result, ensure_ascii=False, indent=2, default=str)
         except Exception:
             pass
     return str(result)
+
+
+def _projection_spec(output_spec: dict[str, Any] | None) -> dict[str, Any]:
+    spec = dict((output_spec or {}).get("project") or {})
+    spec.setdefault("fields_param", "fields")
+    spec.setdefault("brief_param", "brief")
+    spec.setdefault("brief_fields", [])
+    spec.setdefault("allowed_fields", [])
+    return spec
+
+
+def _project_items(
+    result: dict[str, Any],
+    pspec: dict[str, Any],
+    params: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Project items, or return None when projection would empty the payload."""
+    from cliyard.output import projection
+
+    items = result.get("items")
+    if not isinstance(items, list) or not items:
+        return None
+    work = dict(pspec)
+    if not work.get("brief_fields"):
+        work["brief_fields"] = projection.default_brief_fields(items, work)
+    if not work["brief_fields"]:
+        return None
+    projected = projection.project(result, work, params)
+    if projected is result:
+        return None
+    projected_items = projected.get("items")
+    if isinstance(projected_items, list) and items and all(
+        isinstance(item, dict) and not item for item in projected_items
+    ):
+        return None
+    return projected
 
 
 class MCPExecutor:
@@ -340,9 +425,7 @@ class MCPExecutor:
 
         out = out_buf.getvalue().strip()
         err = err_buf.getvalue().strip()
-        if err and out:
-            return f"{out}\n[stderr] {err}"
-        return out or err or f"(no output from {spec.target})"
+        return command_envelope(out, err, getattr(spec, "output_kind", "json"))
 
     def execute_case(self, case_name: str, params: dict[str, Any]) -> Any:
         """Execute a case and return aggregated results."""
@@ -528,24 +611,79 @@ class MCPExecutor:
                 _sanitize_error(str(exc), self.spec_dir), self.upload_dir
             )
             return CallToolResult(
-                content=[TextContent(type="text", text=text)],
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {"status": "error", "items": [], "total": 0, "warn": text},
+                        ensure_ascii=False,
+                    ),
+                )],
                 is_error=True,
             )
-        return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result))])
+        # Discover-mode ``call`` wraps a catalog target: use THAT target's output
+        # metadata for projection (the wrapper itself has none).
+        output_spec = getattr(spec, "output", None)
+        if isinstance(arguments, dict):
+            target_name = arguments.get("name")
+            if target_name and target_name in getattr(self, "_catalog", {}):
+                output_spec = getattr(self._catalog[target_name], "output", output_spec)
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=self._limit_result(result, arguments, output_spec),
+                )
+            ]
+        )
 
-    def _limit_result(self, result: Any) -> str:
-        """Apply the output size guard; overflow goes to the shared upload store."""
+    def _limit_result(
+        self,
+        result: Any,
+        arguments: dict[str, Any] | None = None,
+        output_spec: dict[str, Any] | None = None,
+    ) -> str:
+        """Unified projection + output size guard (see module docstring)."""
+        from cliyard.output import projection
+
+        if isinstance(result, dict) and isinstance(result.get("items"), list):
+            if "status" not in result:
+                result = dict(result)
+                result["status"] = "ok" if result["items"] else "empty"
+            if not isinstance(result.get("total"), int):
+                result["total"] = len(result["items"])
+
         text = _render_result(result)
         try:
             from cliyard.output.limits import (
-                human_warning,
+                infer_schema,
                 resolve_max_chars,
                 truncate_text,
             )
 
             limit = resolve_max_chars()
+            params = arguments or {}
+            if isinstance(params.get("arguments"), dict) and "name" in params:
+                params = params["arguments"]
+
+            spec = output_spec if isinstance(output_spec, dict) else {}
+            enabled = bool(spec.get("items_path")) \
+                and spec.get("unified_projection", True) is not False \
+                and spec.get("projection", True) is not False
+            items = result.get("items") if isinstance(result, dict) else None
+            projectable = enabled and isinstance(items, list)
+            pspec = _projection_spec(spec)
+            fields = projection.parse_fields(params.get(pspec["fields_param"]))
+            brief = projection._truthy(params.get(pspec["brief_param"]))
+
+            if projectable and (fields or brief):
+                projected = _project_items(result, pspec, params)
+                if projected is not None:
+                    result = projected
+                    text = _render_result(result)
+
             if len(text) <= limit:
                 return text
+
             file_path: str | None = None
             url: str | None = None
             overflow_error: str | None = None
@@ -563,22 +701,76 @@ class MCPExecutor:
             except Exception as exc:
                 overflow_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("output overflow handoff failed", exc_info=True)
+
             auth_hint = (
-                {
-                    "header": "Authorization: Bearer <KETACLI_MCP_TOKEN>",
-                    "env": "KETACLI_MCP_TOKEN",
-                }
-                if url
-                else None
+                {"header": "Authorization: Bearer <KETACLI_MCP_TOKEN>",
+                 "env": "KETACLI_MCP_TOKEN"}
+                if url else None
             )
+            schema = infer_schema(result)
+            item_count = len(items) if isinstance(items, list) else None
+
+            if projectable:
+                base_meta: dict[str, Any] = {
+                    "truncated": True,
+                    "projected": False,
+                    "reason": "output_truncated",
+                    "bytes": len(text.encode("utf-8")),
+                    "original_bytes": len(text.encode("utf-8")),
+                    "limit": limit,
+                    "items": item_count or 0,
+                    "schema": schema,
+                }
+                if url:
+                    base_meta["url"] = url
+                if file_path:
+                    base_meta["file"] = file_path
+                if auth_hint:
+                    base_meta["auth"] = auth_hint
+                if overflow_error:
+                    base_meta["overflow_error"] = overflow_error
+
+                projected_result = None
+                projection_error = None
+                if items:
+                    if all(not isinstance(item, dict) for item in items):
+                        base_meta["projection_error"] = "scalar_list_cannot_project"
+                        base_meta["hint"] = "输出超过单次上限，items 为前 N 条；完整 JSON 见 url"
+                    else:
+                        projected_result = _project_items(
+                            result, pspec, {pspec["brief_param"]: True}
+                        )
+                        if projected_result is None:
+                            projection_error = "all_items_are_nested_objects"
+                if projected_result is not None:
+                    result = projected_result
+                    base_meta["projected"] = True
+                    base_meta["projection"] = result.get("projection")
+                    base_meta["hint"] = (
+                        "输出超过单次上限，已自动精简字段；items 为精简后的数据，"
+                        "完整 JSON 见 url；也可以用 fields=... / brief=true 自行指定字段"
+                    )
+                if projection_error:
+                    base_meta["projection_error"] = projection_error
+                if "hint" not in base_meta:
+                    base_meta["hint"] = "输出超过单次上限，items 为前 N 条；完整 JSON 见 url，或减小 page_size"
+                payload, returned = projection.fit_items(result, limit, base_meta=base_meta)
+                payload["returned"] = returned
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+
+            hint = "输出超过单次上限：请减小 page_size，或按 url 下载完整 JSON 后自行筛选"
+            if item_count is not None:
+                hint += f"；本次 items={item_count}"
             rendered, notice = truncate_text(
-                text, limit, file=file_path, url=url, json_safe=True, auth=auth_hint
+                text, limit, file=file_path, url=url, json_safe=True,
+                auth=auth_hint, schema=schema, hint=hint,
             )
             if notice is not None:
+                if item_count is not None:
+                    notice["items"] = item_count
                 if overflow_error:
                     notice["overflow_error"] = overflow_error
-                    rendered = json.dumps(notice, ensure_ascii=False, indent=2)
-                rendered = f"{rendered}\n{human_warning(notice)}"
+                rendered = json.dumps(notice, ensure_ascii=False, indent=2)
             return rendered
         except Exception:
             return text
