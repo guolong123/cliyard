@@ -445,7 +445,7 @@ def test_command_envelope_text_kind_is_declared_not_hardcoded():
     assert "stderr" in command_envelope("body", "warn", "text")
     assert command_envelope("", "", "text") == "(no output)"
     # Same content with the default json kind becomes a structured envelope.
-    assert command_envelope("skill-a", "", "json")["status"] == "ok"
+    assert command_envelope("skill-a", "", "json")["status"] == "unknown"
 
 
 def test_add_total_pages():
@@ -565,12 +565,21 @@ def test_mixed_dict_and_scalar_items_are_not_projected(tmp_path):
 def test_json_command_text_error_is_not_ok():
     from cliyard.server.mcp.executor import command_envelope
 
-    err = command_envelope("查询错误: 500 Internal Server Error", "", "json")
+    err = command_envelope("500 Internal Server Error", "", "json")
     assert err["status"] == "error" and "500" in err["warn"] and err["items"] == []
-    cn = command_envelope("执行失败: permission denied", "", "json")
-    assert cn["status"] == "error"
-    ok_text = command_envelope("Available Skills: a, b", "", "json")
-    assert ok_text["status"] == "ok" and ok_text["text"].startswith("Available")
+    assert command_envelope("ERROR: permission denied", "", "json")["status"] == "error"
+    # Non-JSON stdout is "unknown" (neither fake ok nor fake error).
+    text = command_envelope("Available Skills: a, b", "", "json")
+    assert text["status"] == "unknown" and text["text"].startswith("Available")
+
+
+def test_error_detection_does_not_match_counts_or_negations():
+    from cliyard.server.mcp.executor import command_envelope
+
+    for text in ("失败数: 0, 成功数: 120", "查询耗时 5s，无异常", "total=500 items=0", "Sent 500 spans"):
+        out = command_envelope(text, "", "json")
+        assert out["status"] == "unknown", (text, out)
+        assert out["status"] != "error"
 
 
 def test_truncation_notice_has_same_contract_as_normal_path(tmp_path):
@@ -582,3 +591,18 @@ def test_truncation_notice_has_same_contract_as_normal_path(tmp_path):
         assert key in parsed, key
     assert isinstance(parsed["items"], list) and parsed["item_count"] == 20
     assert parsed["status"] == "ok"
+
+
+def test_notice_total_keeps_server_total(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    # Non-projectable branch (projection disabled): server total 10000, page 50.
+    data = {"items": [{"id": i, "blob": "z" * 2000} for i in range(50)], "total": 10000}
+    parsed = json.loads(ex._limit_result(data, {}, {"items_path": "$.items", "projection": False}))
+    assert parsed["total"] == 10000
+    assert parsed["item_count"] == 50
+    # Projectable branch uses the same semantics.
+    data2 = {"items": [{"id": i, "blob": "z" * 2000} for i in range(50)], "total": 10000}
+    parsed2 = json.loads(ex._limit_result(data2, {}, {"items_path": "$.items"}))
+    assert parsed2["total"] == 10000
+    assert parsed2["item_count"] == 50
+    assert parsed2["returned"] <= 50

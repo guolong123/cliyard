@@ -9,16 +9,16 @@
 
 - 空结果：`{"status":"empty","items":[],"total":0}`
 - 失败/拒绝：`{"status":"error","items":[],"total":0,"warn":"..."}`
-- 非 JSON 文本输出：`{"status":"ok","items":[],"total":0,"text":"..."}`；
-  若文本像错误（error/失败/500/denied…）则为 `status:"error"` + `warn`
+- 非 JSON 文本输出：`{"status":"unknown","items":[],"total":0,"text":"..."}`；
+  行首显式错误标记或完整错误短语才为 `status:"error"` + `warn`
 
 **迁移**：客户端按 `items/status/total` 读取；不要再假设裸数组。
 
 ## 2) 超限 notice 与正常路径同契约
 ```json
-{"status":"ok","truncated":true,"items":[...],"returned":N,"item_count":10000,"total":10000,"url":"...","limit":50000}
+{"status":"ok","truncated":true,"items":[...],"returned":50,"item_count":50,"total":10000,"url":"...","limit":50000}
 ```
-- `items` 永远是数组；总条数用 `item_count`（不要从 `items` 推断）。
+- `items` 永远是数组；`item_count` = 本次返回条数，`total` = 服务端总条数（不得用页大小覆盖）。
 - 非分页/不可投影时：`items: []` + `item_count` + `url`（完整数据）。
 
 ## 3) 文本流命令声明

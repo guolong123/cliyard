@@ -55,9 +55,13 @@ logger = logging.getLogger("cliyard.server.mcp")
 # P1-4: structured commands return a uniform envelope; text-stream tools are
 # explicitly whitelisted and keep their raw text contract. New text tools must
 # be added here (and documented) — everything else is structured by default.
+# Only explicit error markers count. Bare numbers (500) and words like 失败/异常
+# appear in successful summaries ("失败数: 0", "无异常"), so they are excluded.
 ERROR_TEXT_RE = __import__("re").compile(
-    r"(?i)\b(error|exception|failed|failure|denied|forbidden|unauthorized|timeout|internal server)\b"
-    r"|失败|错误|异常|拒绝|无权限|超时|\b5\d\d\b"
+    r"(?im)^\s*(?:\[?(?:error|fatal|exception|traceback|panic)\]?\b)"
+    r"|\b500\s+Internal\s+Server\s+Error\b"
+    r"|\bpermission\s+denied\b|\baccess\s+denied\b|\bunauthorized\b|\bforbidden\b"
+    r"|\brequest\s+failed\b|\bconnection\s+refused\b|\boperation\s+timed\s+out\b"
 )
 
 
@@ -81,7 +85,9 @@ def command_envelope(out: str, err: str, output_kind: str = "json") -> Any:
             return {"status": "error", "items": [], "total": 0,
                     "warn": out.strip().splitlines()[0][:300],
                     **({"stderr": err} if err else {})}
-        return {"status": "ok", "items": [], "total": 0, "text": out,
+        # Non-JSON stdout is not provably success: report "unknown" instead of
+        # pretending ok (and never error unless an explicit marker matched).
+        return {"status": "unknown", "items": [], "total": 0, "text": out,
                 **({"warn": err} if err else {})}
     result: dict[str, Any]
     if isinstance(payload, list):
@@ -785,12 +791,17 @@ class MCPExecutor:
             )
             if notice is not None:
                 # Same contract as the normal path: items is always a list and
-                # the count lives in item_count (never an int in ``items``).
+                # the page count lives in item_count. ``total`` keeps the
+                # server-reported total (fallback to the page count if absent).
+                server_total = result.get("total") if isinstance(result, dict) else None
+                if not isinstance(server_total, int):
+                    server_total = item_count
                 notice["status"] = "ok"
                 notice["items"] = []
                 if item_count is not None:
                     notice["item_count"] = item_count
-                    notice.setdefault("total", item_count)
+                if server_total is not None:
+                    notice["total"] = server_total
                 if overflow_error:
                     notice["overflow_error"] = overflow_error
                 rendered = json.dumps(notice, ensure_ascii=False, indent=2)
