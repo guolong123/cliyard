@@ -55,6 +55,12 @@ logger = logging.getLogger("cliyard.server.mcp")
 # P1-4: structured commands return a uniform envelope; text-stream tools are
 # explicitly whitelisted and keep their raw text contract. New text tools must
 # be added here (and documented) — everything else is structured by default.
+ERROR_TEXT_RE = __import__("re").compile(
+    r"(?i)\b(error|exception|failed|failure|denied|forbidden|unauthorized|timeout|internal server)\b"
+    r"|失败|错误|异常|拒绝|无权限|超时|\b5\d\d\b"
+)
+
+
 # Output kinds are declared by tool metadata (spec ``output.kind`` or command
 # plugin ``register_command(output_kind=...)``); no product names live here.
 def command_envelope(out: str, err: str, output_kind: str = "json") -> Any:
@@ -70,6 +76,11 @@ def command_envelope(out: str, err: str, output_kind: str = "json") -> Any:
     try:
         payload = json.loads(out)
     except (TypeError, ValueError):
+        looks_error = bool(ERROR_TEXT_RE.search(out))
+        if looks_error:
+            return {"status": "error", "items": [], "total": 0,
+                    "warn": out.strip().splitlines()[0][:300],
+                    **({"stderr": err} if err else {})}
         return {"status": "ok", "items": [], "total": 0, "text": out,
                 **({"warn": err} if err else {})}
     result: dict[str, Any]
@@ -712,13 +723,14 @@ class MCPExecutor:
 
             if projectable:
                 base_meta: dict[str, Any] = {
+                    "status": "ok",
                     "truncated": True,
                     "projected": False,
                     "reason": "output_truncated",
                     "bytes": len(text.encode("utf-8")),
                     "original_bytes": len(text.encode("utf-8")),
                     "limit": limit,
-                    "items": item_count or 0,
+                    "item_count": item_count or 0,
                     "schema": schema,
                 }
                 if url:
@@ -733,8 +745,14 @@ class MCPExecutor:
                 projected_result = None
                 projection_error = None
                 if items:
-                    if all(not isinstance(item, dict) for item in items):
-                        base_meta["projection_error"] = "scalar_list_cannot_project"
+                    if any(not isinstance(item, dict) for item in items):
+                        # Scalar or mixed list: projection would silently drop
+                        # non-dict entries, so keep raw items and say why.
+                        base_meta["projection_error"] = (
+                            "scalar_list_cannot_project"
+                            if all(not isinstance(item, dict) for item in items)
+                            else "mixed_items_cannot_project"
+                        )
                         base_meta["hint"] = "输出超过单次上限，items 为前 N 条；完整 JSON 见 url"
                     else:
                         projected_result = _project_items(
@@ -766,8 +784,13 @@ class MCPExecutor:
                 auth=auth_hint, schema=schema, hint=hint,
             )
             if notice is not None:
+                # Same contract as the normal path: items is always a list and
+                # the count lives in item_count (never an int in ``items``).
+                notice["status"] = "ok"
+                notice["items"] = []
                 if item_count is not None:
-                    notice["items"] = item_count
+                    notice["item_count"] = item_count
+                    notice.setdefault("total", item_count)
                 if overflow_error:
                     notice["overflow_error"] = overflow_error
                 rendered = json.dumps(notice, ensure_ascii=False, indent=2)

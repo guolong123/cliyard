@@ -477,6 +477,8 @@ def test_scalar_list_over_limit_keeps_items(tmp_path):
     assert parsed["returned"] > 0
     assert len(parsed["items"]) == parsed["returned"]
     assert parsed["items"][0].startswith("scalar-0-")
+    assert parsed["status"] == "ok" and isinstance(parsed["items"], list)
+    assert parsed["item_count"] == 2000
     assert parsed["projection_error"] == "scalar_list_cannot_project"
     assert parsed["url"].startswith("http://h:1/outputs/")
 
@@ -502,7 +504,9 @@ def test_projection_can_be_disabled_by_spec(tmp_path):
         # Projection disabled: over-limit falls back to the structured truncation
         # notice (items is the count, full data via url) instead of projecting.
         assert parsed["truncated"] is True
-        assert parsed["items"] == 20
+        assert parsed["items"] == []
+        assert parsed["item_count"] == 20
+        assert parsed["status"] == "ok"
         assert parsed["url"].startswith("http://h:1/outputs/")
 
 
@@ -521,10 +525,16 @@ def test_tiny_limit_never_overshoots(tmp_path):
 def test_infer_schema_redacts_map_keys():
     from cliyard.output.limits import infer_schema
 
-    schema = infer_schema({"alice@example.com": {"role": "admin"}, "bob@example.com": {}})
-    dumped = json.dumps(schema, ensure_ascii=False)
-    assert "alice@example.com" not in dumped and "bob@example.com" not in dumped
-    assert "<map-key>" in dumped
+    cases = [
+        {"alice@example.com": {"role": "admin"}, "bob@example.com": {}},
+        {"alice": {"role": "admin"}, "bob": {"role": "viewer"}},          # structural
+        {"app-search-events-000001": {"count": 1}},                        # prefixed id
+    ]
+    for value in cases:
+        dumped = json.dumps(infer_schema(value), ensure_ascii=False)
+        assert "<map-key>" in dumped
+        for key in value:
+            assert key not in dumped
     record = infer_schema({"uid": "1", "name": "x"})
     assert record["uid"] == "string" and record["name"] == "string"
 
@@ -537,3 +547,38 @@ def test_total_pages_wired_through_transforms():
         data, {"items_path": "$.x", "total_pages": {"size_param": "per_page"}}, {"per_page": 20}
     )
     assert out["totalPages"] == 3
+
+
+def test_mixed_dict_and_scalar_items_are_not_projected(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    items = []
+    for i in range(200):
+        items.append({"id": i, "blob": "x" * 900} if i % 2 == 0 else f"scalar-{i}-" + "y" * 300)
+    parsed = json.loads(ex._limit_result({"items": items, "total": 200}, {}, {"items_path": "$.items"}))
+    assert parsed["truncated"] is True
+    assert parsed["projected"] is False
+    assert parsed["projection_error"] == "mixed_items_cannot_project"
+    assert parsed["returned"] > 0
+    assert any(not isinstance(item, dict) for item in parsed["items"])  # scalars kept
+
+
+def test_json_command_text_error_is_not_ok():
+    from cliyard.server.mcp.executor import command_envelope
+
+    err = command_envelope("查询错误: 500 Internal Server Error", "", "json")
+    assert err["status"] == "error" and "500" in err["warn"] and err["items"] == []
+    cn = command_envelope("执行失败: permission denied", "", "json")
+    assert cn["status"] == "error"
+    ok_text = command_envelope("Available Skills: a, b", "", "json")
+    assert ok_text["status"] == "ok" and ok_text["text"].startswith("Available")
+
+
+def test_truncation_notice_has_same_contract_as_normal_path(tmp_path):
+    ex = MCPExecutor(_FIXTURES, upload_dir=str(tmp_path), output_base="http://h:1")
+    # projection disabled -> notice branch
+    data = {"items": [{"id": i, "blob": "z" * 5000} for i in range(20)], "total": 20}
+    parsed = json.loads(ex._limit_result(data, {}, {"items_path": "$.items", "projection": False}))
+    for key in ("status", "items", "total", "truncated", "item_count", "url", "limit"):
+        assert key in parsed, key
+    assert isinstance(parsed["items"], list) and parsed["item_count"] == 20
+    assert parsed["status"] == "ok"

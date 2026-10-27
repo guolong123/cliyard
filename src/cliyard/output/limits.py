@@ -67,21 +67,27 @@ _UUID_RE = __import__("re").compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-")
 _DIGITS_RE = __import__("re").compile(r"^\d{4,}$")
 
 
-def _looks_like_map(value: dict) -> bool:
-    """True for keyed maps (emails/uuids/ids) rather than record fields.
+_PREFIXED_ID_RE = __import__("re").compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+){2,}$", __import__("re").I)
 
-    A ``{"alice@example.com": {...}}`` map must not leak the identifiers through
-    the inferred schema; record-shaped dicts (dashboard fields etc.) keep their
-    keys.
+
+def _looks_like_map(value: dict) -> bool:
+    """True for keyed maps (emails/uuids/ids/prefix ids) not record fields.
+
+    Structural rule: >=2 keys and every value is a container → the keys are
+    identifiers, so redact them. Regex fallback covers single-key maps and
+    business prefixes such as ``app-search-events-000001``.
     """
     keys = [str(k) for k in value.keys()]
     if not keys:
         return False
-    suspicious = sum(
-        1 for key in keys
-        if _EMAIL_RE.match(key) or _UUID_RE.match(key) or _DIGITS_RE.match(key)
-    )
-    return suspicious >= max(1, len(keys) // 2)
+    if len(keys) >= 2 and all(isinstance(v, (dict, list)) for v in value.values()):
+        return True
+    for key in keys:
+        if _EMAIL_RE.match(key) or _UUID_RE.match(key) or _DIGITS_RE.match(key):
+            return True
+        if _PREFIXED_ID_RE.match(key) and any(ch.isdigit() for ch in key):
+            return True
+    return False
 
 
 def infer_schema(
