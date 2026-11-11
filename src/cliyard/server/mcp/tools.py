@@ -37,6 +37,15 @@ logger = logging.getLogger("cliyard.server.mcp")
 
 _EMPTY_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}, "required": []}
 
+# Generic extension point: product packages register extra ToolSpec providers.
+_EXTRA_TOOL_PROVIDERS: list[Any] = []
+
+
+def register_tool_provider(provider: Any) -> None:
+    """Register a callable returning ``{name: ToolSpec}`` for MCP tools/list."""
+    if provider not in _EXTRA_TOOL_PROVIDERS:
+        _EXTRA_TOOL_PROVIDERS.append(provider)
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -432,6 +441,16 @@ def build_tool_specs(
     # 命令级插件（@register_command）→ cmd.<command> 工具（命名空间隔离；
     # grouped 模式按顶层命名空间合并为 cmd.<ns> 分组工具）
     specs.update(build_plugin_tool_specs(spec_dir, mode=mode))
+
+    # 通用扩展点：上层产品包可注册自己的工具描述（cliyard 不承载产品语义）。
+    for provider in list(_EXTRA_TOOL_PROVIDERS):
+        try:
+            extra = provider()
+        except Exception:  # noqa: BLE001
+            logger.exception("extra tool provider failed")
+            continue
+        for name, spec in (extra or {}).items():
+            _register(specs, name, spec)
 
     return specs
 

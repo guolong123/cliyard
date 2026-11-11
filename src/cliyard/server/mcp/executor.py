@@ -46,6 +46,15 @@ from cliyard.server.mcp.tools import ToolSpec, build_plugin_tool_specs, build_to
 logger = logging.getLogger("cliyard.server.mcp")
 
 
+# Generic extension point: product packages register a handler by tool name.
+_CUSTOM_TOOL_EXECUTORS: dict[str, Any] = {}
+
+
+def register_tool_executor(name: str, handler: Any) -> None:
+    """Register the callable used to execute a ``kind='custom'`` ToolSpec."""
+    _CUSTOM_TOOL_EXECUTORS[name] = handler
+
+
 def _render_result(result: Any) -> str:
     """把结构化结果渲染为 MCP 文本（dict/list → 缩进 JSON，其余 str()）。"""
     if isinstance(result, (dict, list)):
@@ -377,6 +386,11 @@ class MCPExecutor:
             return self.execute_flow(spec.target, arguments)
         if spec.kind == "plugin":
             return self.execute_plugin_command(spec, arguments)
+        if spec.kind == "custom":
+            handler = _CUSTOM_TOOL_EXECUTORS.get(spec.name)
+            if handler is None:
+                raise ValueError(f"custom tool {spec.name!r} has no executor")
+            return handler(arguments)
         if spec.kind == "grouped":
             args = dict(arguments or {})
             # Deliberate edge：名为 `operation` 的业务参数无法穿透分组工具——
