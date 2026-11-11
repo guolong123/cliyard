@@ -545,21 +545,71 @@ class MCPExecutor:
                 content=[TextContent(type="text", text=text)],
                 is_error=True,
             )
-        return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result))])
+        return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result, spec.name, arguments))])
 
-    def _limit_result(self, result: Any) -> str:
-        """Apply the output size guard; overflow goes to the shared upload store."""
-        text = _render_result(result)
+    def _limit_result(self, result: Any, tool_name: str = "", arguments: Any = None) -> str:
+        """Apply the output size guard and attach server-recorded metadata.
+
+        ``_meta`` is generic (no product semantics): tool name, the arguments
+        recorded by the executor, truncation flag, total/returned counts and the
+        overflow URL.  For over-limit results the payload is replaced by
+        ``{_meta, notice}`` so the caller can still understand what was called.
+        """
+        meta_args = arguments if isinstance(arguments, dict) else {}
+        meta_tool = tool_name
+        # discover-mode ``call``/similar dispatcher: use the target tool and its
+        # nested arguments, never a model-provided URL/string.
+        nested_name = meta_args.get("name")
+        nested_args = meta_args.get("arguments")
+        if isinstance(nested_name, str) and isinstance(nested_args, dict):
+            meta_tool = nested_name
+            meta_args = nested_args
+        # Never surface session credentials in metadata.
+        meta_args = {
+            k: v for k, v in meta_args.items()
+            if k not in ("_session_id", "session_id")
+        }
+
+        def _stats(value: Any) -> tuple[Any, int]:
+            total = None
+            returned = 0
+            if isinstance(value, dict):
+                total = value.get("total")
+                for key in ("items", "data", "rows", "results", "dashboards", "alerts", "agents"):
+                    rows = value.get(key)
+                    if isinstance(rows, list):
+                        returned = len(rows)
+                        break
+            elif isinstance(value, list):
+                returned = len(value)
+            return total, returned
+
+        def _with_meta(value: Any, meta: dict[str, Any]) -> Any:
+            if isinstance(value, dict):
+                out = {"_meta": meta}
+                for k, v in value.items():
+                    if k != "_meta":
+                        out[k] = v
+                return out
+            return {"_meta": meta, "data": value}
+
         try:
-            from cliyard.output.limits import (
-                human_warning,
-                resolve_max_chars,
-                truncate_text,
-            )
+            from cliyard.output.limits import resolve_max_chars
 
             limit = resolve_max_chars()
+            total, returned = _stats(result)
+            base_meta = {
+                "tool": meta_tool,
+                "arguments": meta_args,
+                "truncated": False,
+                "total": total,
+                "returned": returned,
+                "limit": limit,
+            }
+            text = _render_result(_with_meta(result, base_meta))
             if len(text) <= limit:
                 return text
+
             file_path: str | None = None
             url: str | None = None
             overflow_error: str | None = None
@@ -567,7 +617,7 @@ class MCPExecutor:
                 from cliyard.server.uploads import save_output_text, sweep
 
                 sweep(self.upload_dir)
-                saved = save_output_text(text, self.upload_dir)
+                saved = save_output_text(_render_result(result), self.upload_dir)
                 if self.output_base:
                     from cliyard.server.api.output_tokens import output_url
 
@@ -577,25 +627,24 @@ class MCPExecutor:
             except Exception as exc:
                 overflow_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("output overflow handoff failed", exc_info=True)
-            auth_hint = (
-                {
-                    "header": "Authorization: Bearer <KETACLI_MCP_TOKEN>",
-                    "env": "KETACLI_MCP_TOKEN",
-                }
-                if url
-                else None
-            )
-            rendered, notice = truncate_text(
-                text, limit, file=file_path, url=url, json_safe=True, auth=auth_hint
-            )
-            if notice is not None:
-                if overflow_error:
-                    notice["overflow_error"] = overflow_error
-                    rendered = json.dumps(notice, ensure_ascii=False, indent=2)
-                rendered = f"{rendered}\n{human_warning(notice)}"
-            return rendered
+
+            meta = dict(base_meta)
+            meta["truncated"] = True
+            meta["returned"] = 0
+            if url:
+                meta["url"] = url
+            elif file_path:
+                meta["file"] = file_path
+            if overflow_error:
+                meta["overflow_error"] = overflow_error
+            notice = "结果超过 %d 字符，已截断" % limit
+            if url:
+                notice += "；完整数据见 url"
+            elif file_path:
+                notice += "；完整数据见 file"
+            return json.dumps({"_meta": meta, "notice": notice}, ensure_ascii=False, indent=2)
         except Exception:
-            return text
+            return _render_result(result)
 
     # ------------------------------------------------------------------
     # 低层 MCP Server 构造
