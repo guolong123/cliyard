@@ -662,16 +662,51 @@ class MCPExecutor:
             content=[
                 TextContent(
                     type="text",
-                    text=self._limit_result(result, arguments, output_spec),
+                    text=self._limit_result(result, arguments, output_spec, spec.name),
                 )
             ]
         )
+
+    @staticmethod
+    def _meta(
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        truncated: bool,
+        total: Any,
+        returned: int,
+        limit: int,
+        url: str | None = None,
+        file: str | None = None,
+    ) -> dict[str, Any]:
+        """Generic, product-agnostic output metadata."""
+        args = arguments if isinstance(arguments, dict) else {}
+        # Discover-mode nested call: metadata belongs to the target tool.
+        nested_name = args.get("name")
+        nested_args = args.get("arguments")
+        if isinstance(nested_name, str) and isinstance(nested_args, dict):
+            tool_name = nested_name
+            args = nested_args
+        clean = {k: v for k, v in args.items() if k not in ("_session_id", "session_id")}
+        meta: dict[str, Any] = {
+            "tool": tool_name,
+            "arguments": clean,
+            "truncated": truncated,
+            "total": total,
+            "returned": returned,
+            "limit": limit,
+        }
+        if url:
+            meta["url"] = url
+        elif file:
+            meta["file"] = file
+        return meta
 
     def _limit_result(
         self,
         result: Any,
         arguments: dict[str, Any] | None = None,
         output_spec: dict[str, Any] | None = None,
+        tool_name: str = "",
     ) -> str:
         """Unified projection + output size guard (see module docstring)."""
         from cliyard.output import projection
@@ -693,8 +728,10 @@ class MCPExecutor:
 
             limit = resolve_max_chars()
             params = arguments or {}
+            meta_args = params
             if isinstance(params.get("arguments"), dict) and "name" in params:
                 params = params["arguments"]
+                meta_args = params
 
             spec = output_spec if isinstance(output_spec, dict) else {}
             enabled = bool(spec.get("items_path")) \
@@ -713,6 +750,20 @@ class MCPExecutor:
                     text = _render_result(result)
 
             if len(text) <= limit:
+                if projection._truthy((meta_args or {}).get("view")):
+                    total = result.get("total") if isinstance(result, dict) else None
+                    if isinstance(result, dict) and isinstance(result.get("items"), list):
+                        returned = len(result["items"])
+                    elif isinstance(result, list):
+                        returned = len(result)
+                    else:
+                        returned = 1
+                    meta = self._meta(tool_name, meta_args, False, total, returned, limit)
+                    if isinstance(result, dict):
+                        merged = {"_meta": meta}
+                        merged.update({k: v for k, v in result.items() if k != "_meta"})
+                        return _render_result(merged)
+                    return _render_result({"_meta": meta, "data": result})
                 return text
 
             file_path: str | None = None
@@ -722,7 +773,7 @@ class MCPExecutor:
                 from cliyard.server.uploads import save_output_text, sweep
 
                 sweep(self.upload_dir)
-                saved = save_output_text(text, self.upload_dir)
+                saved = save_output_text(_render_result(result), self.upload_dir)
                 if self.output_base:
                     from cliyard.server.api.output_tokens import output_url
 
@@ -740,6 +791,11 @@ class MCPExecutor:
             )
             schema = infer_schema(result)
             item_count = len(items) if isinstance(items, list) else None
+            original_total = result.get("total") if isinstance(result, dict) else None
+            trunc_meta = self._meta(
+                tool_name, meta_args, True, original_total, 0, limit,
+                url=url, file=file_path,
+            )
 
             if projectable:
                 base_meta: dict[str, Any] = {
@@ -794,6 +850,11 @@ class MCPExecutor:
                     base_meta["hint"] = "输出超过单次上限，items 为前 N 条；完整 JSON 见 url，或减小 page_size"
                 payload, returned = projection.fit_items(result, limit, base_meta=base_meta)
                 payload["returned"] = returned
+                trunc_meta["returned"] = returned
+                payload["_meta"] = trunc_meta
+                payload["notice"] = "结果超过 %d 字符，已截断%s" % (
+                    limit, "；完整数据见 url" if url else "；完整数据见 file" if file_path else ""
+                )
                 return json.dumps(payload, ensure_ascii=False, indent=2)
 
             hint = "输出超过单次上限：请减小 page_size，或按 url 下载完整 JSON 后自行筛选"
@@ -818,10 +879,14 @@ class MCPExecutor:
                     notice["total"] = server_total
                 if overflow_error:
                     notice["overflow_error"] = overflow_error
+                notice["_meta"] = trunc_meta
+                notice["notice"] = "结果超过 %d 字符，已截断%s" % (
+                    limit, "；完整数据见 url" if url else "；完整数据见 file" if file_path else ""
+                )
                 rendered = json.dumps(notice, ensure_ascii=False, indent=2)
             return rendered
         except Exception:
-            return text
+            return _render_result(result)
 
     # ------------------------------------------------------------------
     # 低层 MCP Server 构造
