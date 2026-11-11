@@ -69,6 +69,7 @@ class ToolSpec:
     description: str
     input_schema: dict[str, Any] = field(default_factory=lambda: dict(_EMPTY_SCHEMA))
     operations: dict[str, ToolSpec] | None = None
+    channel: str = "mcp"
 
     def as_tool(self) -> Tool:
         """转换为 MCP :class:`~mcp.types.Tool`（tools/list 返回用）。"""
@@ -104,6 +105,7 @@ def _command_spec(
         target=name,  # 命令场景 tool name == /api/execute target
         description=description,
         input_schema=cmd.get("schema") or dict(_EMPTY_SCHEMA),
+        channel=str(cmd.get("channel") or "mcp"),
     )
 
 

@@ -546,7 +546,9 @@ class MCPExecutor:
                 content=[TextContent(type="text", text=text)],
                 is_error=True,
             )
-        return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result, spec.name, arguments, spec.input_schema))])
+        return CallToolResult(content=[TextContent(type="text", text=self._limit_result(
+            result, spec.name, arguments, spec.input_schema,
+            getattr(spec, "channel", "mcp") or "mcp"))])
 
     @staticmethod
     def _view_arguments(raw: Any) -> tuple[str, dict[str, Any]]:
@@ -663,7 +665,8 @@ class MCPExecutor:
             summary.pop("topN", None)
         return summary
 
-    def _limit_result(self, result: Any, tool_name: str = "", arguments: Any = None, input_schema: Any = None) -> str:
+    def _limit_result(self, result: Any, tool_name: str = "", arguments: Any = None,
+                      input_schema: Any = None, channel: str = "mcp") -> str:
         """Apply the output size guard and attach server-recorded metadata.
 
         ``_meta`` is generic (no product semantics): tool name, the arguments
@@ -677,10 +680,12 @@ class MCPExecutor:
         # Resolve the target schema for nested dispatcher calls, then fill
         # documented defaults into the replay arguments (generic; no product map).
         schema = input_schema if isinstance(input_schema, dict) else {}
+        target_channel = channel
         if meta_tool and meta_tool != tool_name:
             target_spec = self._tool_specs.get(meta_tool) or self._catalog.get(meta_tool)
             if target_spec is not None:
                 schema = target_spec.input_schema or {}
+                target_channel = getattr(target_spec, "channel", "mcp") or "mcp"
         props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
         for key, prop in props.items():
             if key in meta_args or not isinstance(prop, dict) or "default" not in prop:
@@ -723,7 +728,7 @@ class MCPExecutor:
             base_meta = {
                 "tool": meta_tool,
                 "arguments": meta_args,
-                "channel": "mcp",
+                "channel": target_channel,
                 "source": "mcp",
                 "truncated": False,
                 "total": total,

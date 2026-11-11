@@ -167,9 +167,30 @@ def _param_to_property(
     if "default" in param:
         prop["default"] = param["default"]
     for src, dst in (("min", "minimum"), ("max", "maximum"),
-                     ("minimum", "minimum"), ("maximum", "maximum")):
+                     ("minimum", "minimum"), ("maximum", "maximum"),
+                     ("min_length", "minLength"), ("max_length", "maxLength"),
+                     ("min_items", "minItems"), ("max_items", "maxItems"),
+                     ("pattern", "pattern")):
         if param.get(src) is not None:
             prop[dst] = param[src]
+    # Nested object fields (e.g. time{earliest,latest}) are intentionally
+    # schema-bridged too, so the tool contract is self-describing.
+    if param.get("type") in ("json", "object") and isinstance(param.get("properties"), dict):
+        nested = {}
+        for key, sub in param["properties"].items():
+            if not isinstance(sub, dict):
+                continue
+            item = _base_schema_for(sub)
+            if sub.get("description"):
+                item["description"] = sub["description"]
+            for src, dst in (("min", "minimum"), ("max", "maximum"),
+                             ("min_length", "minLength"), ("max_length", "maxLength")):
+                if sub.get(src) is not None:
+                    item[dst] = sub[src]
+            nested[str(key)] = item
+        if nested:
+            prop["properties"] = nested
+            prop["additionalProperties"] = False
     if param.get("description"):
         prop["description"] = param["description"]
     if param.get("type") == "file":
@@ -365,6 +386,7 @@ def build_command_tree(
                     "desc": method_spec.get("description") or mname,
                     "path": path,
                     "method": method,
+                    "channel": method_spec.get("channel") or resource.get("channel") or "mcp",
                     "schema": params_to_json_schema(
                         method_spec.get("params"),
                         title=mname,
