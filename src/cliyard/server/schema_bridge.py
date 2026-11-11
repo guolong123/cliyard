@@ -168,6 +168,10 @@ def _param_to_property(
 
     if "default" in param:
         prop["default"] = param["default"]
+    for src, dst in (("min", "minimum"), ("max", "maximum"),
+                     ("minimum", "minimum"), ("maximum", "maximum")):
+        if param.get(src) is not None:
+            prop[dst] = param[src]
     if param.get("description"):
         prop["description"] = param["description"]
     if param.get("type") == "file":
