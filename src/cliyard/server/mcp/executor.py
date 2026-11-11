@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import logging
 from pathlib import Path
 from typing import Any
@@ -701,6 +702,101 @@ class MCPExecutor:
             meta["file"] = file
         return meta
 
+    @staticmethod
+    def _infer_type(value: Any) -> str:
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, int):
+            return "integer"
+        if isinstance(value, float):
+            return "number"
+        if isinstance(value, (dict, list)):
+            return "object"
+        if isinstance(value, str):
+            if value.endswith("Z") or __import__("re").match(r"^\d{4}-\d{2}-\d{2}[T ]", value):
+                return "time"
+            return "string"
+        return "string"
+
+    @classmethod
+    def _summary_columns(cls, result: Any) -> list[dict[str, str]]:
+        if isinstance(result, dict):
+            fields = result.get("fields")
+            if isinstance(fields, list) and fields:
+                cols: list[dict[str, str]] = []
+                for field in fields[:40]:
+                    if isinstance(field, dict):
+                        name = field.get("name") or field.get("field") or ""
+                        typ = field.get("type") or "string"
+                    else:
+                        name, typ = str(field), "string"
+                    if name:
+                        cols.append({"name": str(name), "type": str(typ)})
+                if cols:
+                    return cols
+            # Generic envelope keys only; product-specific keys belong to specs.
+            for key in ("items", "data", "rows", "results"):
+                rows = result.get(key)
+                if isinstance(rows, list) and rows:
+                    first = rows[0]
+                    if isinstance(first, dict):
+                        return [{"name": str(k), "type": cls._infer_type(first[k])} for k in list(first)[:40]]
+                    if isinstance(first, list):
+                        return [{"name": f"col{i + 1}", "type": cls._infer_type(v)} for i, v in enumerate(first[:40])]
+        elif isinstance(result, list) and result:
+            first = result[0]
+            if isinstance(first, dict):
+                return [{"name": str(k), "type": cls._infer_type(first[k])} for k in list(first)[:40]]
+        return []
+
+    @classmethod
+    def _view_summary(cls, result: Any, limit: int) -> dict[str, Any]:
+        total, returned = 0, 0
+        if isinstance(result, dict):
+            try:
+                total = int(result.get("total") or 0)
+            except Exception:
+                total = 0
+            for key in ("items", "data", "rows", "results"):
+                rows = result.get(key)
+                if isinstance(rows, list):
+                    returned = len(rows)
+                    break
+        elif isinstance(result, list):
+            returned = len(result)
+        original_size = len(_render_result(result))
+        summary: dict[str, Any] = {
+            "total": total,
+            "returned": returned,
+            "columns": cls._summary_columns(result),
+            "truncated": original_size > limit,
+        }
+        if isinstance(result, dict):
+            for src, dst in (("timeRange", "timeRange"), ("time_range", "timeRange"), ("tookMs", "tookMs"), ("took_ms", "tookMs")):
+                if src in result:
+                    summary[dst] = result[src]
+            top = result.get("topN") or result.get("top_n")
+            if isinstance(top, list):
+                summary["topN"] = top[:5]
+        if len(json.dumps(summary, ensure_ascii=False, default=str)) > 1600:
+            summary["columns"] = summary["columns"][:12]
+            summary.pop("topN", None)
+        return summary
+
+    @staticmethod
+    def _cap_arguments(args: dict[str, Any], limit: int = 2048) -> tuple[dict[str, Any], bool]:
+        current = dict(args)
+        try:
+            if len(json.dumps(current, ensure_ascii=False, default=str)) <= limit:
+                return current, False
+        except Exception:
+            return {}, True
+        for key in sorted(current, key=lambda k: len(json.dumps(current[k], ensure_ascii=False, default=str)), reverse=True):
+            current.pop(key, None)
+            if len(json.dumps(current, ensure_ascii=False, default=str)) <= limit:
+                break
+        return current, True
+
     def _limit_result(
         self,
         result: Any,
@@ -749,21 +845,31 @@ class MCPExecutor:
                     result = projected
                     text = _render_result(result)
 
+            clean_args, args_truncated = self._cap_arguments(meta_args)
+            view = projection._truthy((clean_args or {}).get("view"))
+            if view:
+                summary = self._view_summary(result, limit)
+                meta = self._meta(
+                    tool_name, clean_args, bool(summary.get("truncated")),
+                    summary.get("total"), int(summary.get("returned") or 0), limit,
+                )
+                meta["channel"] = "mcp"
+                meta["source"] = "mcp"
+                if args_truncated:
+                    meta["arguments_truncated"] = True
+                payload = {
+                    "view": True,
+                    "summary": summary,
+                    "notice": "数据已渲染到页面，摘要仅供定位；不要复述或推测行内容。需要逐行分析时改用 view=false 重新查询。",
+                    "_meta": meta,
+                }
+                rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                if len(rendered.encode("utf-8")) > 2048:
+                    summary["columns"] = summary.get("columns", [])[:8]
+                    summary.pop("topN", None)
+                    rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                return rendered
             if len(text) <= limit:
-                if projection._truthy((meta_args or {}).get("view")):
-                    total = result.get("total") if isinstance(result, dict) else None
-                    if isinstance(result, dict) and isinstance(result.get("items"), list):
-                        returned = len(result["items"])
-                    elif isinstance(result, list):
-                        returned = len(result)
-                    else:
-                        returned = 1
-                    meta = self._meta(tool_name, meta_args, False, total, returned, limit)
-                    if isinstance(result, dict):
-                        merged = {"_meta": meta}
-                        merged.update({k: v for k, v in result.items() if k != "_meta"})
-                        return _render_result(merged)
-                    return _render_result({"_meta": meta, "data": result})
                 return text
 
             file_path: str | None = None
