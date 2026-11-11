@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import logging
 from pathlib import Path
 from typing import Any
@@ -545,9 +546,124 @@ class MCPExecutor:
                 content=[TextContent(type="text", text=text)],
                 is_error=True,
             )
-        return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result, spec.name, arguments))])
+        return CallToolResult(content=[TextContent(type="text", text=self._limit_result(result, spec.name, arguments, spec.input_schema))])
 
-    def _limit_result(self, result: Any, tool_name: str = "", arguments: Any = None) -> str:
+    @staticmethod
+    def _view_arguments(raw: Any) -> tuple[str, dict[str, Any]]:
+        if not isinstance(raw, dict):
+            return "", {}
+        tool = ""
+        args = raw
+        nested_name = raw.get("name")
+        nested_args = raw.get("arguments")
+        if isinstance(nested_name, str) and isinstance(nested_args, dict):
+            tool = nested_name
+            args = nested_args
+        return tool, {
+            k: v for k, v in args.items()
+            if k not in ("_session_id", "session_id")
+        }
+
+    @staticmethod
+    def _cap_arguments(args: dict[str, Any], limit: int = 2048) -> tuple[dict[str, Any], bool]:
+        """Keep replay arguments <=2KB; report if keys had to be dropped."""
+        current = dict(args)
+        try:
+            size = len(json.dumps(current, ensure_ascii=False, default=str))
+        except Exception:
+            return {}, True
+        if size <= limit:
+            return current, False
+        # Drop largest top-level values first, preserving small replayable keys.
+        keys = sorted(current, key=lambda k: len(json.dumps(current[k], ensure_ascii=False, default=str)), reverse=True)
+        for key in keys:
+            current.pop(key, None)
+            if len(json.dumps(current, ensure_ascii=False, default=str)) <= limit:
+                break
+        return current, True
+
+    @staticmethod
+    def _infer_type(value: Any) -> str:
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, int):
+            return "integer"
+        if isinstance(value, float):
+            return "number"
+        if isinstance(value, (dict, list)):
+            return "object"
+        if isinstance(value, str):
+            if value.endswith("Z") or re.match(r"^\d{4}-\d{2}-\d{2}[T ]", value):
+                return "time"
+            return "string"
+        return "string"
+
+    @classmethod
+    def _summary_columns(cls, result: Any) -> list[dict[str, str]]:
+        if isinstance(result, dict):
+            fields = result.get("fields")
+            if isinstance(fields, list) and fields:
+                cols: list[dict[str, str]] = []
+                for field in fields[:40]:
+                    if isinstance(field, dict):
+                        name = field.get("name") or field.get("field") or ""
+                        typ = field.get("type") or "string"
+                    else:
+                        name, typ = str(field), "string"
+                    if name:
+                        cols.append({"name": str(name), "type": str(typ)})
+                if cols:
+                    return cols
+            for key in ("items", "data", "rows", "results", "dashboards", "alerts", "agents"):
+                rows = result.get(key)
+                if isinstance(rows, list) and rows:
+                    first = rows[0]
+                    if isinstance(first, dict):
+                        return [{"name": str(k), "type": cls._infer_type(first[k])} for k in list(first)[:40]]
+                    if isinstance(first, list):
+                        return [{"name": f"col{i + 1}", "type": cls._infer_type(v)} for i, v in enumerate(first[:40])]
+        elif isinstance(result, list) and result:
+            first = result[0]
+            if isinstance(first, dict):
+                return [{"name": str(k), "type": cls._infer_type(first[k])} for k in list(first)[:40]]
+        return []
+
+    @classmethod
+    def _view_summary(cls, result: Any, limit: int) -> dict[str, Any]:
+        total, returned = 0, 0
+        if isinstance(result, dict):
+            try:
+                total = int(result.get("total") or 0)
+            except Exception:
+                total = 0
+            for key in ("items", "data", "rows", "results", "dashboards", "alerts", "agents"):
+                rows = result.get(key)
+                if isinstance(rows, list):
+                    returned = len(rows)
+                    break
+        elif isinstance(result, list):
+            returned = len(result)
+        original_size = len(_render_result(result))
+        summary: dict[str, Any] = {
+            "total": total,
+            "returned": returned,
+            "columns": cls._summary_columns(result),
+            "truncated": original_size > limit,
+        }
+        if isinstance(result, dict):
+            for src, dst in (("timeRange", "timeRange"), ("time_range", "timeRange"), ("tookMs", "tookMs"), ("took_ms", "tookMs")):
+                if src in result:
+                    summary[dst] = result[src]
+            top = result.get("topN") or result.get("top_n")
+            if isinstance(top, list):
+                summary["topN"] = top[:5]
+        # Hard cap the summary itself (columns/topN are the only unbounded parts).
+        if len(json.dumps(summary, ensure_ascii=False, default=str)) > 1600:
+            summary["columns"] = summary["columns"][:12]
+            summary.pop("topN", None)
+        return summary
+
+    def _limit_result(self, result: Any, tool_name: str = "", arguments: Any = None, input_schema: Any = None) -> str:
         """Apply the output size guard and attach server-recorded metadata.
 
         ``_meta`` is generic (no product semantics): tool name, the arguments
@@ -555,20 +671,26 @@ class MCPExecutor:
         overflow URL.  For over-limit results the payload is replaced by
         ``{_meta, notice}`` so the caller can still understand what was called.
         """
-        meta_args = arguments if isinstance(arguments, dict) else {}
-        meta_tool = tool_name
-        # discover-mode ``call``/similar dispatcher: use the target tool and its
-        # nested arguments, never a model-provided URL/string.
-        nested_name = meta_args.get("name")
-        nested_args = meta_args.get("arguments")
-        if isinstance(nested_name, str) and isinstance(nested_args, dict):
-            meta_tool = nested_name
-            meta_args = nested_args
-        # Never surface session credentials in metadata.
-        meta_args = {
-            k: v for k, v in meta_args.items()
-            if k not in ("_session_id", "session_id")
-        }
+        meta_tool, meta_args = self._view_arguments(arguments)
+        if not meta_tool:
+            meta_tool = tool_name
+        # Resolve the target schema for nested dispatcher calls, then fill
+        # documented defaults into the replay arguments (generic; no product map).
+        schema = input_schema if isinstance(input_schema, dict) else {}
+        if meta_tool and meta_tool != tool_name:
+            target_spec = self._tool_specs.get(meta_tool) or self._catalog.get(meta_tool)
+            if target_spec is not None:
+                schema = target_spec.input_schema or {}
+        props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        for key, prop in props.items():
+            if key in meta_args or not isinstance(prop, dict) or "default" not in prop:
+                continue
+            if key in ("_session_id", "session_id"):
+                continue
+            meta_args[key] = prop["default"]
+        meta_args, args_truncated = self._cap_arguments(meta_args)
+        view_raw = meta_args.get("view", False)
+        view = view_raw is True or (isinstance(view_raw, str) and view_raw.lower() in ("1", "true", "yes", "on"))
 
         def _stats(value: Any) -> tuple[Any, int]:
             total = None
@@ -601,11 +723,33 @@ class MCPExecutor:
             base_meta = {
                 "tool": meta_tool,
                 "arguments": meta_args,
+                "channel": "mcp",
+                "source": "mcp",
                 "truncated": False,
                 "total": total,
                 "returned": returned,
                 "limit": limit,
             }
+            if args_truncated:
+                base_meta["arguments_truncated"] = True
+            if view:
+                summary = self._view_summary(result, limit)
+                summary["truncated"] = bool(summary.get("truncated"))
+                view_meta = dict(base_meta)
+                view_meta["truncated"] = summary["truncated"]
+                view_meta["returned"] = summary.get("returned", returned)
+                payload = {
+                    "view": True,
+                    "summary": summary,
+                    "notice": "数据已渲染到页面，摘要仅供定位；不要复述或推测行内容。需要逐行分析时改用 view=false 重新查询。",
+                    "_meta": view_meta,
+                }
+                rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                if len(rendered) > 2048:
+                    summary["columns"] = summary.get("columns", [])[:8]
+                    summary.pop("topN", None)
+                    rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                return rendered
             text = _render_result(_with_meta(result, base_meta))
             if len(text) <= limit:
                 return text

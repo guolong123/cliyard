@@ -25,7 +25,7 @@ from cliyard.engine.labels import resolve_labels
 from cliyard.engine.loader import load_cases, load_flows, load_service
 
 # JSON Schema 属性位置的固定遍历顺序（与 method params 的 YAML 分组一致）
-_PARAM_LOCATIONS = ("path", "query", "header", "body", "argument")
+_PARAM_LOCATIONS = ("path", "query", "header", "body", "argument", "local")
 
 
 # ---------------------------------------------------------------------------

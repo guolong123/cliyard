@@ -43,3 +43,50 @@ def test_unicode_and_special_arguments_are_preserved():
     out = _executor()._limit_result(_items(5), "repo.list", args)
     body = json.loads(out)
     assert body["_meta"]["arguments"] == args
+
+
+def test_view_true_output_under_2kb():
+    result = {
+        "items": [
+            {"name": "n", "kind": "k", "size": 1, "ok": True, "at": "2026-11-11T00:00:00Z"}
+            for _ in range(20)
+        ],
+        "total": 128,
+    }
+    out = _executor()._limit_result(result, "repo.list", {"view": True, "page": 1, "page_size": 10})
+    assert len(out.encode()) <= 2048
+    body = json.loads(out)
+    assert body["view"] is True
+    assert set(body["summary"]) >= {"total", "returned", "columns", "truncated"}
+    assert body["_meta"]["arguments"]["view"] is True
+
+
+def test_view_summary_columns_and_types():
+    result = {"items": [{"name": "a", "count": 3, "ok": False, "at": "2026-11-11T00:00:00Z"}]}
+    body = json.loads(_executor()._limit_result(result, "repo.list", {"view": True}))
+    types = {c["name"]: c["type"] for c in body["summary"]["columns"]}
+    assert types == {"name": "string", "count": "integer", "ok": "boolean", "at": "time"}
+
+
+def test_view_topn_is_capped_at_five():
+    result = {"items": [], "total": 0, "topN": [{"key": str(i), "count": i} for i in range(9)]}
+    body = json.loads(_executor()._limit_result(result, "repo.list", {"view": True}))
+    assert len(body["summary"]["topN"]) == 5
+
+
+def test_view_false_keeps_data_and_meta():
+    result = {"items": [{"name": "a"}], "total": 1}
+    body = json.loads(_executor()._limit_result(result, "repo.list", {"view": False, "page": 1}))
+    assert body["items"] == [{"name": "a"}]
+    assert body["_meta"]["arguments"]["page"] == 1
+    assert body["_meta"]["truncated"] is False
+
+
+def test_truncated_output_has_meta_in_both_views():
+    result = {"dashboards": [{"id": str(i), "xml": "y" * 4000} for i in range(20)], "total": 49}
+    view_body = json.loads(_executor()._limit_result(result, "dashboard.list", {"view": True, "page": 1}))
+    data_body = json.loads(_executor()._limit_result(result, "dashboard.list", {"view": False, "page": 1}))
+    assert view_body["summary"]["truncated"] is True
+    assert view_body["_meta"]["truncated"] is True
+    assert data_body["_meta"]["truncated"] is True
+    assert "notice" in view_body and "notice" in data_body
