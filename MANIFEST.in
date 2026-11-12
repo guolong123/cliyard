@@ -1,0 +1,7 @@
+# Source distributions include the test suite so downstream packagers can run
+# the same smoke/regression checks as CI.  Setuptools includes test_*.py by
+# default but not conftest.py / helper modules / fixture data, so be explicit.
+recursive-include tests *.py
+recursive-include tests/fixtures *
+# Test suite also exercises the example service.
+recursive-include examples *
