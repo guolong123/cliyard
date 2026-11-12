@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.0
+
+### Features
+- **MCP `view=summary`**：工具参数传 `view=true` 时返回通用摘要
+  `{view, summary:{total,returned,columns,truncated}, notice, _meta}`，整体 ≤2KB；
+  `view=false` / 不传时保持既有输出不变。
+- **`_meta` 仅按需注入**：只在 `view=true` 或输出被截断时出现，包含
+  `tool/arguments/truncated/total/returned/limit` 及可选 `url/file`，不再改变默认输出契约。
+- 截断结果继续保留顶层 `truncated/total/returned/limit/url`（以及 `notice`），
+  兼容既有消费者。
+- 扩展点 `register_tool_executor`：产品包可按工具名注册 `kind=custom` 执行器。
+
+### Fixes
+- `executor.py` 移除产品响应键（`dashboards/alerts/agents`），摘要列只识别通用
+  `items/data/rows/results` 或 spec 的 `fields` / `output.items_path`，保持框架零产品语义。
+
 ## 0.21.0 (BREAKING)
 
 ### Breaking changes

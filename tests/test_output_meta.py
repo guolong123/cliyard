@@ -43,3 +43,52 @@ def test_unicode_and_special_arguments_are_preserved():
     out = _executor()._limit_result(_items(5), {**args, "view": True}, None, "repo.list")
     body = json.loads(out)
     assert body["_meta"]["arguments"] == {**args, "view": True}
+
+
+def test_default_output_unchanged_without_view_or_truncation():
+    out = _executor()._limit_result({"ok": True}, {"page": 1}, None, "repo.list")
+    assert json.loads(out) == {"ok": True}
+    assert "_meta" not in json.loads(out)
+
+
+def test_view_summary_is_generic_and_under_2kb():
+    out = _executor()._limit_result(
+        _items(500, 200), {"view": True, "page": 1}, None, "repo.list"
+    )
+    assert len(out.encode("utf-8")) <= 2048
+    body = json.loads(out)
+    assert body["view"] is True
+    assert body["summary"]["returned"] == 500
+    assert body["summary"]["truncated"] is True
+    assert body["summary"]["columns"][0] == {"name": "name", "type": "string"}
+    assert body["_meta"]["arguments"] == {"view": True, "page": 1}
+
+
+def test_view_summary_accepts_generic_data_rows_results_keys():
+    for key in ("data", "rows", "results"):
+        out = _executor()._limit_result(
+            {key: [{"id": 1, "name": "x"}], "total": 1},
+            {"view": True}, None, "repo.list",
+        )
+        body = json.loads(out)
+        assert body["summary"]["returned"] == 1
+        assert [c["name"] for c in body["summary"]["columns"]] == ["id", "name"]
+
+
+def test_truncated_output_keeps_legacy_toplevel_fields():
+    out = _executor()._limit_result(_items(400, 200), {"page": 2}, None, "repo.list")
+    body = json.loads(out)
+    for key in ("truncated", "total", "returned", "limit", "url"):
+        assert key in body
+    assert body["truncated"] is True
+    assert body["_meta"]["truncated"] is True
+    assert body["_meta"]["arguments"] == {"page": 2}
+
+
+def test_view_summary_stays_under_2kb_with_long_keys_and_args():
+    long_key = "k" * 500
+    data = {long_key: [{long_key: "v" * 500}], "total": 1}
+    args = {"view": True, "q": "x" * 5000}
+    out = _executor()._limit_result(data, args, None, "repo.list")
+    assert len(out.encode("utf-8")) <= 2048
+    json.loads(out)
