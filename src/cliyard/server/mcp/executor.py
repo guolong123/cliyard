@@ -713,7 +713,7 @@ class MCPExecutor:
         if isinstance(value, (dict, list)):
             return "object"
         if isinstance(value, str):
-            if value.endswith("Z") or __import__("re").match(r"^\d{4}-\d{2}-\d{2}[T ]", value):
+            if value.endswith("Z") or re.match(r"^\d{4}-\d{2}-\d{2}[T ]", value):
                 return "time"
             return "string"
         return "string"
@@ -731,7 +731,7 @@ class MCPExecutor:
                     else:
                         name, typ = str(field), "string"
                     if name:
-                        cols.append({"name": str(name), "type": str(typ)})
+                        cols.append({"name": str(name)[:80], "type": str(typ)[:20]})
                 if cols:
                     return cols
             # Generic envelope keys only; product-specific keys belong to specs.
@@ -740,13 +740,13 @@ class MCPExecutor:
                 if isinstance(rows, list) and rows:
                     first = rows[0]
                     if isinstance(first, dict):
-                        return [{"name": str(k), "type": cls._infer_type(first[k])} for k in list(first)[:40]]
+                        return [{"name": str(k)[:80], "type": cls._infer_type(first[k])} for k in list(first)[:40]]
                     if isinstance(first, list):
                         return [{"name": f"col{i + 1}", "type": cls._infer_type(v)} for i, v in enumerate(first[:40])]
         elif isinstance(result, list) and result:
             first = result[0]
             if isinstance(first, dict):
-                return [{"name": str(k), "type": cls._infer_type(first[k])} for k in list(first)[:40]]
+                return [{"name": str(k)[:80], "type": cls._infer_type(first[k])} for k in list(first)[:40]]
         return []
 
     @classmethod
@@ -845,7 +845,7 @@ class MCPExecutor:
                     result = projected
                     text = _render_result(result)
 
-            clean_args, args_truncated = self._cap_arguments(meta_args)
+            clean_args, args_truncated = self._cap_arguments(meta_args, 512)
             view = projection._truthy((clean_args or {}).get("view"))
             if view:
                 summary = self._view_summary(result, limit)
@@ -865,8 +865,19 @@ class MCPExecutor:
                 }
                 rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                 if len(rendered.encode("utf-8")) > 2048:
-                    summary["columns"] = summary.get("columns", [])[:8]
-                    summary.pop("topN", None)
+                    for keep in (8, 4, 0):
+                        summary["columns"] = summary.get("columns", [])[:keep]
+                        summary.pop("topN", None)
+                        rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                        if len(rendered.encode("utf-8")) <= 2048:
+                            break
+                if len(rendered.encode("utf-8")) > 2048:
+                    # Last resort: drop replay args/details, never emit invalid JSON.
+                    meta["arguments"] = {}
+                    meta["arguments_truncated"] = True
+                    summary = {k: summary[k] for k in ("total", "returned", "truncated")}
+                    summary["columns"] = []
+                    payload["summary"] = summary
                     rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                 return rendered
             if len(text) <= limit:
@@ -986,6 +997,7 @@ class MCPExecutor:
                 if overflow_error:
                     notice["overflow_error"] = overflow_error
                 notice["_meta"] = trunc_meta
+                notice["returned"] = 0
                 notice["notice"] = "结果超过 %d 字符，已截断%s" % (
                     limit, "；完整数据见 url" if url else "；完整数据见 file" if file_path else ""
                 )
