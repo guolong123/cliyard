@@ -459,7 +459,18 @@ def build_tool_specs(
 
     # auth 管理命令（add/status/switch/rm）→ auth.<command> 工具。
     # 与 CLI 共用 add_auth_commands 的命令定义，命名与 `cmd.*` 插件隔离。
-    specs.update(build_auth_tool_specs(spec_dir, mode=mode))
+    # 兼容性：若 spec 自身已有名为 auth 的资源（grouped 模式下工具名同为
+    # `auth`，flat 下为 `auth.<method>`），保留原工具、跳过冲突的 auth 工具，
+    # 避免下游产物升级后 silently 丢失业务工具。
+    for name, spec in build_auth_tool_specs(spec_dir, mode=mode).items():
+        if name in specs:
+            logger.warning(
+                "Skip auth MCP tool %r: name already used by spec tool (kind=%s)",
+                name,
+                specs[name].kind,
+            )
+            continue
+        specs[name] = spec
 
     # 命令级插件（@register_command）→ cmd.<command> 工具（命名空间隔离；
     # grouped 模式按顶层命名空间合并为 cmd.<ns> 分组工具）

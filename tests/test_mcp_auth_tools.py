@@ -126,6 +126,30 @@ def test_auth_specs_with_no_auth_config_still_register(tmp_path):
     assert "auth.add" in specs
 
 
+def test_auth_tool_does_not_shadow_spec_resource(tmp_path):
+    """兼容性：spec 自身有 auth 资源时，grouped 工具名冲突时保留业务工具。"""
+    spec = tmp_path / "auth-resource"
+    spec.mkdir()
+    (spec / "_auth.yaml").write_text(
+        "name: auth-resource\nserver:\n  main:\n    base_url: http://127.0.0.1:1\n",
+        encoding="utf-8",
+    )
+    (spec / "auth.yaml").write_text(
+        "description: Auth resource\npath: auth\nmethods:\n"
+        "  list:\n    http: {method: GET}\n",
+        encoding="utf-8",
+    )
+
+    flat = build_tool_specs(spec, mode="flat")
+    assert flat["auth.list"].kind == "command"
+    assert "auth.add" in flat  # flat 下无冲突，auth 管理工具照常注册
+
+    grouped = build_tool_specs(spec, mode="grouped")
+    # grouped 下资源工具名同为 auth —— 必须保留资源工具而非 auth 管理工具
+    assert "list" in (grouped["auth"].operations or {})
+    assert "add" not in (grouped["auth"].operations or {})
+
+
 # ---------------------------------------------------------------------------
 # 执行（真 call_tool）
 # ---------------------------------------------------------------------------
