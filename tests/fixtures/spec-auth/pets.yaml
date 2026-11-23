@@ -1,0 +1,5 @@
+description: Pets
+path: pets
+methods:
+  list:
+    http: {method: GET}

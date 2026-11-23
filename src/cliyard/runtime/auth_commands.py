@@ -27,11 +27,14 @@ def add_auth_commands(
     service: dict,
     base_url: str = "",
     service_id: str | None = None,
-) -> None:
+) -> click.Group:
     """Register auth command group on a CLI group.
 
     Credentials are namespaced by *service_id* so each cliyard-based CLI
     only reads/writes its own profiles.
+
+    Returns:
+        挂载到 *cli* 的 ``auth`` 命令组，供 MCP 工具注册复用同一份命令定义。
     """
     auth_spec = service.get("auth") or {}
     svc: str = service_id or auth_spec.get("id") or service.get("name", "default")
@@ -205,3 +208,5 @@ def add_auth_commands(
             cur = get_current_profile(service=svc)
             if cur:
                 _console.print(f"Current: {cur.get('_name', '?')}")
+
+    return auth

@@ -279,7 +279,7 @@ def test_format_event_table_redacts_sensitive_values():
 
 
 def test_run_flow_step_callback():
-    """run_flow emits step_start / step_done per step and one flow_end."""
+    """run_flow emits flow_start / step_start / step_done per step / flow_end."""
     flow_spec = FlowSpec(
         command="demo",
         description="demo flow",
@@ -301,6 +301,7 @@ def test_run_flow_step_callback():
     )
 
     assert [name for name, _ in events] == [
+        "flow_start",
         "step_start",
         "step_done",
         "step_start",
@@ -308,12 +309,13 @@ def test_run_flow_step_callback():
         "flow_end",
     ]
 
-    assert events[0][1] == {"index": 1, "id": "s1", "label": "第一步", "use": ""}
-    assert events[1][1]["status"] == "ok"
-    assert events[1][1]["elapsed_ms"] >= 0
-    assert "result_preview" in events[1][1]
-    assert events[3][1]["index"] == 2
-    assert events[4][1] == {"outcome": "completed", "step_count": 2}
+    assert events[0][1] == {"step_count": 2}
+    assert events[1][1] == {"index": 1, "id": "s1", "label": "第一步", "use": ""}
+    assert events[2][1]["status"] == "ok"
+    assert events[2][1]["elapsed_ms"] >= 0
+    assert "result_preview" in events[2][1]
+    assert events[4][1]["index"] == 2
+    assert events[5][1] == {"outcome": "completed", "step_count": 2}
 
 
 def test_run_flow_step_callback_no_steps():

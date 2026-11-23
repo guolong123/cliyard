@@ -78,15 +78,23 @@ def test_root_returns_build_hint_json(client):
 
 
 def test_package_webui_dist_selected_when_present():
-    """包内 dist（随 wheel 分发）存在时 _WEBUI_DIST 指向包内路径。"""
+    """包内 dist（随 wheel 分发）存在时 _WEBUI_DIST 指向包内路径。
+
+    源码检出下 webui/dist 是构建产物、默认不存在；该断言仅对已安装 wheel
+    有意义，故 dist 缺失时跳过。
+    """
     package_dist = Path(server_app.__file__).resolve().parent / "webui" / "dist"
-    assert package_dist.is_dir()
+    if not package_dist.is_dir():
+        pytest.skip("packaged webui/dist not built (source checkout)")
     assert server_app._WEBUI_DIST == package_dist
     assert (server_app._WEBUI_DIST / "index.html").is_file()
 
 
 def test_root_serves_frontend_when_built():
     """前端已构建（包内 dist 存在）时 / 返回 index.html 而非提示 JSON。"""
+    package_dist = Path(server_app.__file__).resolve().parent / "webui" / "dist"
+    if not package_dist.is_dir():
+        pytest.skip("packaged webui/dist not built (source checkout)")
     client = TestClient(create_app(str(_DEMO_SPEC)))
     resp = client.get("/")
     assert resp.status_code == 200

@@ -1,0 +1,24 @@
+name: auth-probe
+version: "1.0"
+description: Minimal spec for auth MCP tool tests (no plugins)
+server:
+  main:
+    base_url: http://127.0.0.1:1
+auth:
+  id: auth-probe
+  params:
+    username: AUTH_PROBE_USER
+    password: AUTH_PROBE_PASS
+  steps:
+    - name: inject
+      type: inject
+      config:
+        source: direct
+        field: token
+        into: header
+        name: Authorization
+  persist:
+    to: cliyard-config
+    fields:
+      token:
+        from: inject
