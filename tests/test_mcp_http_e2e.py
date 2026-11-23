@@ -127,11 +127,19 @@ def test_http_standalone_list_and_call(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_http_mounted_into_serve_same_port(tmp_path):
+def test_http_mounted_into_serve_same_port(tmp_path, monkeypatch):
     """MCP 挂载进 serve FastAPI：/mcp 可用且 /health 同端口正常。"""
     upstream = MockUpstream()
     spec = write_spec(tmp_path, upstream.base_url)
     port = _free_port()
+
+    # 隔离 serve 历史库到 tmp_path：默认 ~/.cliyard 在部分环境只读，
+    # HistoryStore 初始化时会因无法建 WAL 文件而失败（与其他 serve e2e 一致）。
+    from cliyard.server import app as server_app
+
+    monkeypatch.setattr(
+        server_app, "_HISTORY_DB", str(tmp_path / "serve_history.db")
+    )
 
     serve_app = create_app(_FIXTURES_SPEC)  # 现有 serve（fixtures/spec-dir）
     mount_mcp_http(serve_app, spec, path="/mcp", host="127.0.0.1", port=port)

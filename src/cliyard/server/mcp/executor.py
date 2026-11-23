@@ -129,6 +129,53 @@ def register_tool_executor(name: str, handler: Any) -> None:
     _CUSTOM_TOOL_EXECUTORS[name] = handler
 
 
+def _arguments_to_click_args(cmd: Any, arguments: dict[str, Any]) -> list[str]:
+    """把 MCP arguments 映射为 click CLI 参数列表。
+
+    规则与 ``tools._click_param_to_property`` 的 schema 映射对称：
+    Argument 用 param.name；Option 用长选项名去 ``--`` 转下划线；
+    flag 为真时带选项名，multiple/nargs=-1 重复带选项名。
+    """
+    import click
+
+    args: list[str] = []
+    for param in getattr(cmd, "params", []) or []:
+        if isinstance(param, click.Argument):
+            value = (arguments or {}).get(param.name)
+            if value is None:
+                continue
+            if param.nargs == -1:
+                values = value if isinstance(value, list) else [value]
+                args.extend(str(v) for v in values)
+            else:
+                args.append(str(value))
+        elif isinstance(param, click.Option):
+            prop_name = ""
+            for opt in param.opts or []:
+                if opt.startswith("--"):
+                    prop_name = opt[2:].replace("-", "_")
+                    break
+            if not prop_name:
+                prop_name = param.name or ""
+            value = (arguments or {}).get(prop_name)
+            if value is None:
+                continue
+            long_opt = next(
+                (o for o in param.opts if o.startswith("--")), param.opts[-1]
+            )
+            if param.is_flag:
+                if value:
+                    args.append(long_opt)
+                continue
+            if param.multiple or param.nargs == -1:
+                values = value if isinstance(value, list) else [value]
+                for v in values:
+                    args.extend([long_opt, str(v)])
+            else:
+                args.extend([long_opt, str(value)])
+    return args
+
+
 def _render_result(result: Any) -> str:
     """Render a structured result as MCP text (dict/list → indented JSON)."""
     if isinstance(result, (dict, list)):
@@ -393,39 +440,7 @@ class MCPExecutor:
             raise ValueError(f"Command plugin {spec.target!r} not found")
 
         # MCP arguments → click CLI 参数（长选项名对齐 schema 属性名）
-        args: list[str] = []
-        for param in getattr(cmd, "params", []) or []:
-            if isinstance(param, click.Argument):
-                value = (arguments or {}).get(param.name)
-                if value is None:
-                    continue
-                if param.nargs == -1:
-                    values = value if isinstance(value, list) else [value]
-                    args.extend(str(v) for v in values)
-                else:
-                    args.append(str(value))
-            elif isinstance(param, click.Option):
-                prop_name = ""
-                for opt in param.opts or []:
-                    if opt.startswith("--"):
-                        prop_name = opt[2:].replace("-", "_")
-                        break
-                if not prop_name:
-                    prop_name = param.name or ""
-                value = (arguments or {}).get(prop_name)
-                if value is None:
-                    continue
-                long_opt = next((o for o in param.opts if o.startswith("--")), param.opts[-1])
-                if param.is_flag:
-                    if value:
-                        args.append(long_opt)
-                    continue
-                if param.multiple or param.nargs == -1:
-                    values = value if isinstance(value, list) else [value]
-                    for v in values:
-                        args.extend([long_opt, str(v)])
-                else:
-                    args.extend([long_opt, str(value)])
+        args = _arguments_to_click_args(cmd, arguments)
 
         out_buf = io.StringIO()
         err_buf = io.StringIO()
@@ -453,6 +468,71 @@ class MCPExecutor:
         out = out_buf.getvalue().strip()
         err = err_buf.getvalue().strip()
         return command_envelope(out, err, getattr(spec, "output_kind", "json"))
+
+    def execute_auth_command(self, spec: ToolSpec, arguments: dict[str, Any]) -> Any:
+        """执行 auth 管理命令（``auth.add/status/switch/rm``）。
+
+        复用 ``add_auth_commands`` 的真实 click 命令定义，参数映射与
+        ``execute_plugin_command`` 一致（长选项名 ↔ schema 属性名）。
+        stdout/stderr 一并捕获；rich Console（模块级单例）会临时重绑到捕获流，
+        结束后还原，避免污染后续命令输出。
+        """
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        import click
+
+        from cliyard.engine.errors import CliyError
+        from cliyard.runtime import auth_commands as auth_mod
+        from cliyard.server.mcp.tools import _build_auth_cli
+
+        cli = _build_auth_cli(self.spec_dir)
+        ctx = click.Context(cli)
+        auth_group = cli.get_command(ctx, "auth")
+        if not isinstance(auth_group, click.Group):
+            raise ValueError("auth command group not found")
+
+        target = spec.target.removeprefix("auth.")
+        parts = target.split(".")
+        cmd: Any = auth_group
+        for part in parts:
+            if isinstance(cmd, click.Group):
+                cmd = cmd.get_command(ctx, part)
+            else:
+                break
+        if cmd is None:
+            raise ValueError(f"auth command {spec.target!r} not found")
+
+        args = _arguments_to_click_args(cmd, arguments)
+
+        out_buf = io.StringIO()
+        err_buf = io.StringIO()
+        # 模块级 rich Console 持有构造时的 stdout 引用；重定向期间临时改绑。
+        old_console_file = getattr(auth_mod._console, "file", None)
+        auth_mod._console.file = out_buf
+        try:
+            with redirect_stdout(out_buf), redirect_stderr(err_buf):
+                try:
+                    cmd.main(
+                        args,
+                        prog_name=f"cliyard auth {target}",
+                        standalone_mode=False,
+                    )
+                except SystemExit as e:
+                    if e.code not in (None, 0):
+                        raise CliyError(
+                            f"auth command '{spec.target}' exited with code {e.code!r}"
+                        )
+                except click.exceptions.Exit:
+                    pass
+        except click.UsageError:
+            raise
+        finally:
+            auth_mod._console.file = old_console_file
+
+        out = out_buf.getvalue().strip()
+        err = err_buf.getvalue().strip()
+        return command_envelope(out, err, getattr(spec, "output_kind", "text"))
 
     def execute_case(self, case_name: str, params: dict[str, Any]) -> Any:
         """Execute a case and return aggregated results."""
@@ -532,6 +612,8 @@ class MCPExecutor:
             return self.execute_flow(spec.target, arguments)
         if spec.kind == "plugin":
             return self.execute_plugin_command(spec, arguments)
+        if spec.kind == "auth":
+            return self.execute_auth_command(spec, arguments)
         if spec.kind == "custom":
             handler = _CUSTOM_TOOL_EXECUTORS.get(spec.name)
             if handler is None:

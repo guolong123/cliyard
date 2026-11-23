@@ -359,10 +359,12 @@ def test_04_grouped_count_and_structure(spec_dir: Path):
     grouped = build_tool_specs(spec_dir, mode="grouped")
     flat = build_tool_specs(spec_dir, mode="flat")
 
+    # auth 管理命令也注册为 grouped 工具（auth），与资源工具分开断言
     res_tools = {
         n for n, s in grouped.items()
-        if s.kind == "grouped" and not n.startswith("cmd.")
+        if s.kind == "grouped" and not n.startswith("cmd.") and n != "auth"
     }
+    assert grouped["auth"].kind == "grouped"
     assert res_tools == {"alpha", "item", "docs", "g1.token", "g2.token"}
     flow_tools = {n for n, s in grouped.items() if s.kind == "flow"}
     assert len(flow_tools) == 2
@@ -379,8 +381,13 @@ def test_04_grouped_count_and_structure(spec_dir: Path):
     }
     assert plug_tools == namespaces
 
-    assert len(grouped) == len(res_tools) + len(flow_tools) + len(plug_tools)
-    assert len(grouped) * 2 <= len(flat), (len(grouped), len(flat))
+    assert len(grouped) == len(res_tools) + len(flow_tools) + len(plug_tools) + 1  # +auth
+    # 分组压缩比只按资源工具衡量（插件命令因全局 registry 会跨 spec 累积，
+    # 不纳入此比例）；每个 grouped 资源工具都对应多个 flat 方法工具。
+    flat_commands = {n for n, s in flat.items() if s.kind == "command"}
+    assert len(res_tools) + 2 <= len(flat_commands), (
+        len(res_tools), len(flat_commands)
+    )
 
     # zero cross-mode leakage
     assert "alpha.create" not in grouped
@@ -396,9 +403,10 @@ def test_05_operation_enum_matches_flat_method_set(spec_dir: Path):
     flat = build_tool_specs(spec_dir, mode="flat")
     res_tools = [
         (n, s) for n, s in grouped.items()
-        if s.kind == "grouped" and not n.startswith("cmd.")
+        if s.kind == "grouped" and not n.startswith("cmd.") and n != "auth"
     ]
     assert len(res_tools) == 5
+    assert "auth" in grouped  # auth grouped 工具单独验证（见 test_mcp_auth_tools.py）
     for tool_name, spec in res_tools:
         enum = spec.input_schema["properties"]["operation"]["enum"]
         flat_ops = sorted(

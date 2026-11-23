@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.23.0
+
+### Features
+- **auth 管理命令注册为 MCP 工具**：以 MCP 模式启动时，工具表新增
+  `auth.add` / `auth.status` / `auth.switch` / `auth.rm`（flat 模式）或单条
+  `auth` 工具配 `operation` 枚举（grouped 模式）；discover 模式下收录于隐藏
+  catalog。工具定义复用 CLI 的 `add_auth_commands`，schema 由 click 参数派生，
+  含动态 `--server-*` 选项。
+
+### Fixes
+- 工具注册兼容：spec 自带名为 `auth` 的资源时，grouped 模式保留业务工具，
+  不再被 auth 工具静默覆盖（冲突时打 warning 并跳过）。
+- 测试稳定性：serve 历史库统一隔离到 `tmp_path`（`~/.cliyard` 只读环境不再
+  导致大批 `create_app()` 测试失败）；`run_flow` 的 `flow_start` 事件断言已更新；
+  wheel 专属的 frontend-dist 测试在源码检出下 skip。
+
 ## 0.22.0
 
 ### Features

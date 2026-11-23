@@ -457,6 +457,21 @@ def build_tool_specs(
             input_schema=dict(_EMPTY_SCHEMA),
         ))
 
+    # auth 管理命令（add/status/switch/rm）→ auth.<command> 工具。
+    # 与 CLI 共用 add_auth_commands 的命令定义，命名与 `cmd.*` 插件隔离。
+    # 兼容性：若 spec 自身已有名为 auth 的资源（grouped 模式下工具名同为
+    # `auth`，flat 下为 `auth.<method>`），保留原工具、跳过冲突的 auth 工具，
+    # 避免下游产物升级后 silently 丢失业务工具。
+    for name, spec in build_auth_tool_specs(spec_dir, mode=mode).items():
+        if name in specs:
+            logger.warning(
+                "Skip auth MCP tool %r: name already used by spec tool (kind=%s)",
+                name,
+                specs[name].kind,
+            )
+            continue
+        specs[name] = spec
+
     # 命令级插件（@register_command）→ cmd.<command> 工具（命名空间隔离；
     # grouped 模式按顶层命名空间合并为 cmd.<ns> 分组工具）
     specs.update(build_plugin_tool_specs(spec_dir, mode=mode))
@@ -500,6 +515,96 @@ def _register(specs: dict[str, ToolSpec], name: str, spec: ToolSpec) -> None:
             spec.target,
         )
     specs[name] = spec
+
+
+# ---------------------------------------------------------------------------
+# auth 管理命令 → MCP tools
+# ---------------------------------------------------------------------------
+
+
+def _build_auth_cli(spec_dir: str | Path, base_ctx: Any = None) -> click.Group:
+    """构建只挂载 ``auth`` 命令组的临时 click.Group。
+
+    复用 ``runtime.auth_commands.add_auth_commands`` 的真实命令定义，保证
+    MCP 工具与 CLI 的 auth 参数 / 行为逐项一致（无重复实现）。
+    """
+    from cliyard.engine.loader import load_service
+    from cliyard.runtime.auth_commands import add_auth_commands
+
+    service = load_service(str(spec_dir))
+    cli = click.Group(name="auth-tools")
+    add_auth_commands(cli, service)
+    return cli
+
+
+def build_auth_tool_specs(
+    spec_dir: str | Path, base_ctx: Any = None, mode: str = "flat"
+) -> dict[str, ToolSpec]:
+    """把 auth 管理命令映射为 ``auth.<command>`` MCP 工具。
+
+    Args:
+        spec_dir: cliyard spec 目录。
+        base_ctx: 保留参数，与 :func:`build_plugin_tool_specs` 对齐。
+        mode: ``"flat"`` → 每个子命令一条工具（``auth.add`` / ``auth.status`` /
+            ``auth.switch`` / ``auth.rm``）；``"grouped"`` → 合并为单条 ``auth``
+            工具，用 ``operation`` 枚举选择子命令；``"discover"`` → 不注册
+            （发现模式下全量 catalog 由 flat 构建，auth 工具随 catalog 可见）。
+
+    Returns:
+        ``{tool_name: ToolSpec}``，kind 统一 ``"auth"``。
+    """
+    if mode == "discover":
+        return {}
+    if mode not in ("flat", "grouped"):
+        raise ValueError(
+            f"unknown MCP tool mode {mode!r} (expected 'flat' or 'grouped')"
+        )
+
+    cli = _build_auth_cli(spec_dir, base_ctx)
+    ctx = click.Context(cli)
+    auth_group = cli.get_command(ctx, "auth")
+    if not isinstance(auth_group, click.Group):
+        return {}
+
+    flat: dict[str, ToolSpec] = {}
+    for name in auth_group.list_commands(ctx):
+        cmd = auth_group.get_command(ctx, name)
+        if cmd is None or getattr(cmd, "hidden", False):
+            continue
+        tool_name = f"auth.{name}"
+        desc = cmd.get_short_help_str(80) or getattr(cmd, "help", None) or tool_name
+        flat[tool_name] = ToolSpec(
+            name=tool_name,
+            kind="auth",
+            target=tool_name,
+            description=str(desc),
+            input_schema=_click_command_to_schema(cmd),
+            output_kind="text",
+        )
+
+    if mode == "flat":
+        return flat
+
+    # grouped：合并为 auth 一条工具，operation 选子命令。
+    operations = {name.removeprefix("auth."): spec for name, spec in flat.items()}
+    union = build_union_schema(
+        "auth",
+        "管理认证凭据（add/status/switch/rm）",
+        [
+            {"name": n, "desc": s.description, "schema": s.input_schema}
+            for n, s in operations.items()
+        ],
+    )
+    return {
+        "auth": ToolSpec(
+            name="auth",
+            kind="grouped",
+            target="auth",
+            description=str(union.get("description") or "auth"),
+            input_schema=union,
+            operations=operations,
+        )
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ Covers:
 - Unknown command target pushes an ``error`` event with status=error
 - Concurrent executions are isolated (separate queues / steps)
 - ``type: file`` base64 params are bridged to temp file paths and cleaned up
-- Flow submission emits step_start / step_done / flow_end then done
+- Flow submission emits flow_start / step_start / step_done / flow_end then done
 - API surface: POST /api/execute, GET stream (SSE), GET status + steps
 
 All pipeline calls are monkeypatched so no real network traffic happens.
@@ -301,7 +301,7 @@ def test_file_bridge_cleanup_after_execution(monkeypatch, tmp_path):
 
 
 def test_submit_flow_event_sequence(monkeypatch):
-    """Flow 执行：step_start → step_done → flow_end → done。"""
+    """Flow 执行：flow_start → step_start → step_done → flow_end → done。"""
     flows = [
         FlowSpec(
             command="demo-flow",
@@ -321,10 +321,13 @@ def test_submit_flow_event_sequence(monkeypatch):
     assert execution.status == "done"
 
     events = _drain(execution)
-    assert [e["type"] for e in events] == ["step_start", "step_done", "flow_end", "done"]
-    assert events[0]["id"] == "s1"
-    assert events[1]["status"] == "ok"
-    assert events[2]["outcome"] == "completed"
+    assert [e["type"] for e in events] == [
+        "flow_start", "step_start", "step_done", "flow_end", "done"
+    ]
+    assert events[0]["step_count"] == 1
+    assert events[1]["id"] == "s1"
+    assert events[2]["status"] == "ok"
+    assert events[3]["outcome"] == "completed"
 
 
 def test_submit_flow_unknown_command_error_event(monkeypatch):
@@ -471,7 +474,9 @@ def test_api_execute_flow(client, monkeypatch):
     with client.stream("GET", f"/api/executions/{execution_id}/stream") as stream:
         content = stream.read().decode()
 
-    assert _sse_event_types(content) == ["step_start", "step_done", "flow_end", "done"]
+    assert _sse_event_types(content) == [
+        "flow_start", "step_start", "step_done", "flow_end", "done"
+    ]
 
 
 # ===========================================================================

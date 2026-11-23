@@ -8,6 +8,22 @@ import yaml
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def isolate_serve_history_db(tmp_path, monkeypatch):
+    """把 serve 历史库隔离到每个测试自己的 tmp 目录。
+
+    默认路径 ``~/.cliyard/serve_history.db`` 在只读 HOME / 沙箱环境不可写，
+    HistoryStore 初始化时会因无法建 WAL 文件而抛 ``OperationalError``，导致
+    所有 ``create_app()`` 测试连带挂掉。这里统一覆盖 ``server_app._HISTORY_DB``，
+    各测试内再自行 monkeypatch 的同名覆盖仍然优先（后设者胜）。
+    """
+    from cliyard.server import app as server_app
+
+    monkeypatch.setattr(
+        server_app, "_HISTORY_DB", str(tmp_path / "serve_history.db")
+    )
+
+
 @pytest.fixture
 def fixtures_dir():
     """Path to the test fixtures directory."""
